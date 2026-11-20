@@ -4,7 +4,8 @@
     { "src": "index.html", "use": "@vercel/static" },
     { "src": "app.js", "use": "@vercel/static" },
     { "src": "styles.css", "use": "@vercel/static" },
-    { "src": "logo.jpeg", "use": "@vercel/static" }
+    { "src": "logo.jpeg", "use": "@vercel/static" },
+    { "src": "firebase-config.js", "use": "@vercel/static" }
   ],
   "routes": [
     { "src": "/(.*\\.(js|css|jpg|jpeg|png|ico|svg))", "headers": { "cache-control": "public, max-age=31536000, immutable" } },
