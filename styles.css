@@ -19,6 +19,34 @@ input, select { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-ra
 
 /* ================= LOGIN ================= */
 #loginView { display: flex; justify-content: center; align-items: center; height: 100vh; background: linear-gradient(135deg, var(--primary-blue), var(--secondary-blue)); }
+
+.login-logo {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 50%;
+  margin-bottom: 15px;
+  border: 3px solid var(--primary-blue);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+}
+
+.admin-logo {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 50%;
+  margin-right: 10px;
+  border: 2px solid rgba(255,255,255,0.3);
+}
+
+.user-logo {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 50%;
+  margin-right: 10px;
+  border: 2px solid rgba(255,255,255,0.3);
+}
 .login-box { background: white; padding: 40px; border-radius: 12px; width: 100%; max-width: 400px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); text-align: center; }
 .login-box h2 { color: var(--primary-blue); margin-bottom: 5px; }
 .login-box p { color: var(--text-light); margin-bottom: 20px; font-size: 14px; }
