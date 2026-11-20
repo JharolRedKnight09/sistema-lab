@@ -1,0 +1,11 @@
+{
+  "name": "laboratorio-nueva-esperanza",
+  "version": "1.0.0",
+  "description": "Sistema de gestión para Laboratorio Clínico Nueva Esperanza",
+  "private": true,
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo \"Static site - no build step needed\"",
+    "start": "vercel dev"
+  }
+}

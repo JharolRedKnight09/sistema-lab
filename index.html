@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Laboratorio Nueva Esperanza</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <script src="https://cdn.jsdelivr.net/npm/emailjs-com@3/dist/email.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ================= VISTA LOGIN ================= -->
+  <section id="loginView">
+    <div class="login-box">
+      <h2>Laboratorio Nueva Esperanza</h2>
+      <p>Ingresa tus credenciales</p>
+      <input id="user" placeholder="Usuario">
+      <input id="pass" type="password" placeholder="Contraseña">
+      <button onclick="login()">Ingresar al Sistema</button>
+    </div>
+  </section>
+
+  <!-- ================= VISTA ADMINISTRADOR ================= -->
+  <section id="adminApp" class="hidden">
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <i class="fa-solid fa-flask"></i> Lab Admin
+      </div>
+      <div class="sidebar-menu">
+        <a class="active" onclick="showAdminView('adminDashboard')"><i class="fa-solid fa-house"></i> Inicio</a>
+        <a onclick="showAdminView('adminUsuarios')"><i class="fa-solid fa-users"></i> Usuarios y Roles</a>
+        <a onclick="showAdminView('adminFacturacion')"><i class="fa-solid fa-file-invoice-dollar"></i> Facturación</a>
+        <a onclick="showAdminView('adminInventario')"><i class="fa-solid fa-boxes-stacked"></i> Inventario</a>
+        <a onclick="showAdminView('adminConfig')"><i class="fa-solid fa-gear"></i> Configuración</a>
+        <a onclick="showAdminView('adminPermisos')"><i class="fa-solid fa-user-shield"></i> Asignar y Delegar Permisos</a>
+      </div>
+    </div>
+
+    <div class="admin-content">
+      <div class="admin-header">
+        <div class="admin-header-left">
+          <button onclick="toggleAdminSidebar()" class="admin-burger" title="Mostrar/Ocultar Menú">
+            <i class="fa-solid fa-bars"></i>
+          </button>
+          <h3 id="adminHeaderTitle">Panel de Administración</h3>
+        </div>
+
+        <div class="admin-profile-container" onclick="toggleAdminDropdown(event)">
+          <span id="adminNameDisplay">Admin</span>
+          <i class="fa-solid fa-circle-user" style="font-size: 24px; color: var(--secondary-blue);"></i>
+          <i class="fa-solid fa-chevron-down" style="font-size: 12px; padding: 5px; transition: transform 0.3s;" id="adminChevron"></i>
+
+          <div class="admin-dropdown" id="adminDropdownMenu" onclick="event.stopPropagation()">
+            <div class="admin-dropdown-header">Cambiar de Modo</div>
+            <a href="#" onclick="event.preventDefault(); cambiarModoAdmin('admin')"><i class="fa-solid fa-chart-pie"></i> Administración</a>
+            <a href="#" onclick="event.preventDefault(); cambiarModoAdmin('laboratorio')"><i class="fa-solid fa-flask"></i> Laboratorio</a>
+            <div class="admin-dropdown-header">Sesión</div>
+            <a href="#" onclick="event.preventDefault(); logout();" style="color: var(--danger);"><i class="fa-solid fa-power-off"></i> Cerrar Sesión</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="admin-main">
+        <!-- MODO ADMINISTRACIÓN (Estadísticas) -->
+        <div id="adminDashboard" class="admin-view">
+          <h2 style="margin-bottom: 20px;">Estadísticas y Rendimiento</h2>
+          
+          <div class="summary-grid">
+            <div class="summary-card">
+              <h4>Ventas totales</h4>
+              <div class="value" id="statVentas">Q 0.00</div>
+              <div class="sub-text"><i class="fa-solid fa-arrow-up"></i> Acumulado total</div>
+            </div>
+            <div class="summary-card">
+              <h4>Órdenes Creadas</h4>
+              <div class="value" id="statOrdenes">0</div>
+              <div class="sub-text" style="color: var(--secondary-blue);">En el sistema</div>
+            </div>
+            <div class="summary-card">
+              <h4>Pacientes Atendidos</h4>
+              <div class="value" id="statPacientes">0</div>
+              <div class="sub-text">Únicos registrados</div>
+            </div>
+            <div class="summary-card">
+              <h4>Exámenes Pendientes</h4>
+              <div class="value" style="color: var(--danger);" id="statPendientes">0</div>
+              <div class="sub-text" style="color: var(--danger);">Sin resultados</div>
+            </div>
+          </div>
+
+          <!-- NUEVAS ESTADÍSTICAS -->
+          <div class="summary-grid">
+            <div class="summary-card">
+              <h4>Examen Más Realizado</h4>
+              <div class="value" id="statExamenMas" style="font-size: 18px; color: var(--success);">N/A</div>
+              <div class="sub-text" id="statExamenMasCant">0 veces</div>
+            </div>
+            <div class="summary-card">
+              <h4>Examen Menos Realizado</h4>
+              <div class="value" id="statExamenMenos" style="font-size: 18px; color: var(--warning);">N/A</div>
+              <div class="sub-text" id="statExamenMenosCant">0 veces</div>
+            </div>
+            <div class="summary-card">
+              <h4>Clasificación: Hombres</h4>
+              <div class="value" id="statHombres">0</div>
+              <div class="sub-text">Pacientes M</div>
+            </div>
+            <div class="summary-card">
+              <h4>Clasificación: Mujeres</h4>
+              <div class="value" id="statMujeres">0</div>
+              <div class="sub-text">Pacientes F</div>
+            </div>
+            <div class="summary-card">
+              <h4>Clasificación: Niños</h4>
+              <div class="value" id="statNinos">0</div>
+              <div class="sub-text">Pacientes N</div>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <div class="table-container" style="padding: 20px;">
+              <h3 style="color: var(--primary-blue); margin-bottom: 15px;">Ingresos Recientes (Últimos 6 registros)</h3>
+              <div id="chartIngresos" style="display: flex; align-items: flex-end; gap: 15px; height: 150px; padding-bottom: 10px; border-bottom: 1px solid #e2e8f0;"></div>
+            </div>
+
+            <div class="table-container" style="padding: 20px;">
+              <h3 style="color: var(--primary-blue); margin-bottom: 15px;">Top Doctores (Comisiones)</h3>
+              <table style="margin-top: 0;">
+                <thead><tr><th>Doctor</th><th>Pacientes</th><th>Comisión</th></tr></thead>
+                <tbody id="topDoctoresBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div id="adminUsuarios" class="admin-view hidden">
+          <h2 style="margin-bottom: 20px;">Gestión de Usuarios</h2>
+          <div class="admin-form">
+            <input type="text" id="newUserName" placeholder="Nombre Completo">
+            <input type="text" id="newUserUser" placeholder="Nombre de Usuario">
+            <input type="password" id="newUserPass" placeholder="Contraseña">
+            <select id="newUserRole">
+              <option value="admin">Administrador</option>
+              <option value="laboratorista">Laboratorista</option>
+              <option value="secretaria">Secretaria</option>
+              <option value="doctor">Doctor</option>
+            </select>
+            <button class="btn-primary" onclick="crearUsuarioAdmin()"><i class="fa-solid fa-plus"></i> Crear Usuario</button>
+          </div>
+          <div class="table-container">
+            <table id="tablaUsuariosAdmin">
+              <thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Acciones</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="adminFacturacion" class="admin-view hidden">
+          <div class="sat-card" style="margin-bottom: 20px; border: none; box-shadow: none;">
+            <div class="sat-card-header" style="border-radius: 8px; background: var(--primary-blue);">
+              <span>Historial de Cierres de Caja</span>
+              <div style="display: flex; gap: 15px; align-items: center;">
+                <button onclick="ui.mostrarPapeleraAdmin()" style="background: none; border: none; color: white; font-size: 20px; cursor: pointer;" title="Papelera">
+                  <i class="fa-solid fa-trash"></i>
+                </button>
+                <i class="fa-solid fa-clock-rotate-left" style="font-size: 20px;"></i>
+              </div>
+            </div>
+            
+            <div class="sat-card-body" style="padding: 0; margin-top: 15px;">
+              <div style="margin-bottom: 15px;">
+                <label style="display:flex; align-items:center; gap:8px; font-size:13px;">Filtrar por mes:
+                  <input type="month" id="filtroMesCajaAdmin" onchange="ui.renderBitacoraAdmin()" style="width:auto; margin:0;">
+                </label>
+              </div>
+              
+              <div class="table-container" style="margin-top: 0; overflow-x: auto;">
+                <table id="tablaBitacoraAdmin">
+                  <thead>
+                    <tr>
+                      <th>No. Cierre</th>
+                      <th>Total en caja</th>
+                      <th>No. Pacientes</th>
+                      <th>Exámenes Realizados</th>
+                      <th>Pagos con tarjeta (Cant.)</th>
+                      <th>Saldo por tarjeta</th>
+                      <th>Pagos en efectivo (Cant.)</th>
+                      <th>Saldo de efectivo</th>
+                      <th>Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="adminInventario" class="admin-view hidden"><h2>Módulo de Inventario</h2><p>En construcción...</p></div>
+        <div id="adminConfig" class="admin-view hidden"><h2>Configuración del Sistema</h2><p>En construcción...</p></div>
+
+        <div id="adminPermisos" class="admin-view hidden">
+          <h2 style="margin-bottom: 20px;">Asignar y Delegar Permisos</h2>
+          <div class="table-container">
+            <table id="tablaPermisosUsuarios">
+              <thead>
+                <tr>
+                  <th>Usuario</th>
+                  <th>Nombre</th>
+                  <th>Rol</th>
+                  <th>Permisos Personalizados</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= VISTA USUARIO / MODO LABORATORIO ================= -->
+  <section id="userApp" class="hidden">
+    <nav class="sat-navbar no-print">
+      <div class="sat-nav-left">
+        <i class="fa-solid fa-bars hamburger" onclick="toggleSatMenu()"></i>
+        <div class="sat-logo">
+          <i class="fa-solid fa-flask" style="color: #60a5fa;"></i> Lab. Nueva Esperanza
+        </div>
+      </div>
+      <div class="sat-nav-right">
+        <button class="icon-btn" onclick="showUserView('userHome')"><i class="fa-solid fa-house"></i></button>
+        <button class="icon-btn" onclick="ui.mostrarNotificaciones()">
+          <i class="fa-regular fa-bell"></i>
+          <span class="badge" id="notifBadge" style="display:none;">0</span>
+        </button>
+
+        <div class="user-dropdown-container" onclick="toggleUserDropdown()">
+          <div class="user-info">
+            <strong id="satUserDisplay">Usuario</strong>
+            <span id="satRoleDisplay">Rol</span>
+          </div>
+          
+          <div id="navUserAvatar" style="width: 35px; height: 35px; border-radius: 50%; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #e2e8f0;">
+            <i class="fa-solid fa-circle-user" style="font-size: 35px; color: #94a3b8;"></i>
+          </div>
+          
+          <i class="fa-solid fa-chevron-down" style="font-size: 12px;"></i>
+
+          <div class="dropdown-menu" id="userDropdownMenu">
+            <div class="dropdown-header"><strong>Administración de Cuenta</strong></div>
+            <a href="#" onclick="event.preventDefault(); showUserView('userHome');"><i class="fa-solid fa-house"></i> Inicio</a>
+            <a href="#" id="dropColaboraciones" onclick="event.preventDefault(); showUserView('userColaboraciones');"><i class="fa-solid fa-handshake-angle"></i> Realizar colaboración</a>
+            <a href="#" onclick="event.preventDefault(); showUserView('userDoctores');" id="dropDoctores"><i class="fa-solid fa-user-plus"></i> Afiliar Doctores</a>
+            <a href="#" onclick="event.preventDefault(); showUserView('userSeguros');" id="dropSeguros"><i class="fa-solid fa-shield-halved"></i> Seguros</a>
+            <a href="#" id="dropBitacora" onclick="event.preventDefault(); showUserView('userBitacora');"><i class="fa-solid fa-list"></i> Bitácora de Transacciones</a>
+            <a href="#" onclick="event.preventDefault(); showUserView('userPerfil');"><i class="fa-solid fa-key"></i> Perfil y Seguridad</a>
+            <div class="dropdown-header"><strong>Sesión</strong></div>
+            <a href="#" id="btnVolverAdmin" onclick="event.preventDefault(); volverModoAdmin();" style="display:none; color: var(--warning);"><i class="fa-solid fa-arrow-left"></i> Volver a Admin</a>
+            <a href="#" onclick="event.preventDefault(); logout();"><i class="fa-solid fa-power-off" style="color:#ef4444;"></i> Cerrar Sesión</a>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <div class="sat-sidebar no-print" id="satSidebar">
+      <div class="sat-sidebar-header">
+        <span>Menú Principal</span>
+        <i class="fa-solid fa-xmark" style="cursor:pointer;" onclick="toggleSatMenu()"></i>
+      </div>
+      <div class="sat-sidebar-menu">
+        <a onclick="showUserView('userHome')" id="menuInicio"><i class="fa-solid fa-house"></i> Inicio</a>
+        <a onclick="showUserView('userDashboard')" id="menuResultados"><i class="fa-solid fa-microscope"></i> Resultados</a>
+        <a onclick="showUserView('userNuevaOrden')" id="menuNuevaOrden"><i class="fa-solid fa-file-medical"></i> Nueva Orden</a>
+        <a onclick="showUserView('userExamenes')" id="menuExamenes"><i class="fa-solid fa-flask"></i> Exámenes</a>
+        <a onclick="showUserView('userReportes')" id="menuReportes"><i class="fa-solid fa-chart-pie"></i> Reportes</a>
+        <a onclick="showUserView('userSolicitar')" id="menuSolicitar"><i class="fa-solid fa-file-prescription"></i> Solicitar Resultados</a>
+        <a onclick="showUserView('userMisSolicitudes')" id="menuMisSolicitudes"><i class="fa-solid fa-list-check"></i> Mis Solicitudes</a>
+      </div>
+    </div>
+
+    <div class="sat-content">
+      
+      <!-- HOME USUARIO -->
+      <div id="userHome" class="user-view">
+        <div class="sat-grid">
+          <div>
+            <div class="welcome-card">
+              <div>
+                <h2>¡Hola! <span id="welcomeName">Usuario</span></h2>
+                <p style="margin-top: 5px; opacity: 0.8;">Bienvenido a tu panel de control.</p>
+              </div>
+              <i class="fa-regular fa-user" style="font-size: 40px; opacity: 0.5;"></i>
+            </div>
+
+            <div class="sat-card" style="margin-bottom: 20px;">
+              <div class="sat-card-body">
+                <h3 style="margin-bottom: 15px; color: var(--primary-blue);">Notificaciones:</h3>
+                <div id="notifInfoCard" class="hidden" style="padding: 15px; background: #fef3c7; border-left: 4px solid #f59e0b; border-radius: 4px; color: #92400e; cursor:pointer;" onclick="ui.mostrarNotificaciones()">
+                  <h4 style="margin: 0 0 5px 0; font-size: 14px;"><i class="fa-solid fa-bell"></i> Tienes notificaciones pendientes</h4>
+                  <p id="notifMensaje" style="margin: 0; font-size: 13px;"></p>
+                </div>
+                <div id="noNotifMsg" style="color: var(--text-light); font-size: 14px;">
+                  No tienes notificaciones pendientes.
+                </div>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div class="sat-card">
+              <div class="sat-card-header"><span>Accesos Rápidos</span><i class="fa-solid fa-question"></i></div>
+              <div class="sat-card-body faq-list">
+                <a href="#" id="homeNuevaOrden" onclick="event.preventDefault(); showUserView('userNuevaOrden')">Generar Orden / Facturar</a>
+                <a href="#" id="homeDashboard" onclick="event.preventDefault(); showUserView('userDashboard')">Reporte de Resultados</a>
+                <a href="#" id="homeSolicitar" onclick="event.preventDefault(); showUserView('userSolicitar')">Pedir Resultados a Lab</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DASHBOARD / RESULTADOS -->
+      <div id="userDashboard" class="user-view hidden">
+        <div class="sat-card">
+          <div class="sat-card-header"><span>Resultados de Laboratorio</span><i class="fa-solid fa-microscope"></i></div>
+          <div class="sat-card-body">
+            <div class="controles-tabla" style="display:flex; gap:15px; flex-wrap:wrap; align-items:center; margin-bottom:15px;">
+              <input placeholder="Buscar paciente o número..." onkeyup="buscarTabla(this,'tablaResultados')" style="flex:1; min-width:200px; margin:0;">
+              <label style="display:flex; align-items:center; gap:8px; font-size:13px;">Fecha: <input type="date" id="filtroFecha" onchange="ui.filtrarPorFecha()" style="width:auto; margin:0;"></label>
+            </div>
+            <div class="table-container" style="margin-top:0;">
+              <table id="tablaResultados">
+                <thead>
+                  <tr>
+                    <th># Orden</th><th>Correlativo</th><th>Fecha</th><th>Paciente</th><th>Doctor</th><th>Total</th>
+                    <th>Detalles</th><th>Editar</th><th>Ver / PDF</th><th>Eliminar</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- NUEVA ORDEN -->
+      <div id="userNuevaOrden" class="user-view hidden">
+        <div class="sat-card">
+          <div class="sat-card-header"><span>Generar Nueva Orden</span><i class="fa-solid fa-file-medical"></i></div>
+          <div class="sat-card-body">
+            <div id="ordenPaso1" class="orden-step">
+              <h4 style="margin-bottom: 15px; color: var(--primary-blue);">1. Datos del Paciente</h4>
+              <div class="form-grid">
+                <input id="nombrePaciente" placeholder="Nombre completo del paciente" style="grid-column: span 2;">
+
+                <div>
+                  <label style="font-size: 12px; color: var(--text-light);">Clasificación</label>
+                  <select id="clasificacionPaciente">
+                    <option value="M">HOMBRE (M)</option>
+                    <option value="F">MUJER (F)</option>
+                    <option value="N">NIÑO (N)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style="font-size: 12px; color: var(--text-light);">Fecha de Nacimiento</label>
+                  <input type="date" id="fechaNacimiento" onchange="ui.calcularEdadAuto()">
+                </div>
+                <div>
+                  <label style="font-size: 12px; color: var(--text-light);">Edad (si no recuerda la fecha)</label>
+                  <input id="edadPaciente" placeholder="Ej. 25 años" oninput="document.getElementById('fechaNacimiento').value = ''">
+                </div>
+
+                <select id="doctorSelect" style="grid-column: span 2;"></select>
+              </div>
+              <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
+                <button class="btn-primary" onclick="ui.irAPaso2()" style="padding: 10px 20px; font-size: 14px;">
+                  Seleccionar exámenes a realizar <i class="fa-solid fa-arrow-right" style="margin-left: 8px;"></i>
+                </button>
+              </div>
+            </div>
+
+            <div id="ordenPaso2" class="orden-step hidden">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h4 style="color: var(--primary-blue); margin: 0;">2. Seleccionar Exámenes</h4>
+                <button class="btn-secondary" onclick="ui.irAPaso1()" style="padding: 5px 15px; font-size: 12px; background: #cbd5e1; color: #334155; border-radius: 4px;">
+                  <i class="fa-solid fa-arrow-left"></i> Volver a Datos
+                </button>
+              </div>
+
+              <input type="text" id="buscarExamen" placeholder="🔍 Buscar examen..." oninput="ui.filtrarChecklist()" style="margin-bottom:10px; max-width:320px;">
+              
+              <div id="listaExamenes" style="margin-bottom: 15px; overflow-x: auto;"></div>
+
+              <div class="billing-section" style="background: #f1f5f9; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0;">
+                <div style="display: flex; gap: 20px; align-items: flex-end; margin-bottom: 20px; flex-wrap: wrap;">
+                  <div>
+                    <label style="font-size: 13px; color: #64748b;">Tipo de Seguro / Convenio</label>
+                    <select id="tipoSeguro" onchange="ui.aplicarSeguro()" style="width: 200px; margin: 0;">
+                      <option value="Ninguno">Ninguno</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style="font-size: 13px; color: #64748b;">Descuento (Q)</label>
+                    <input type="number" id="descuentoOrden" placeholder="0.00" min="0" oninput="ui.actualizarDescuento()" style="width: 120px; margin: 0;">
+                  </div>
+                  <div style="padding-bottom: 10px;">
+                    <span id="descuentoVisual" style="color:#1E8449; font-weight:bold; font-size: 14px;">0%</span>
+                  </div>
+                </div>
+
+                <div style="border-top: 1px solid #cbd5e1; padding-top: 15px; display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap;">
+                  <div>
+                    <p style="margin: 0; font-size: 15px; color: #334155;">Total normal: <strong>Q<span id="totalOrden">0.00</span></strong></p>
+                    <p style="margin: 5px 0 0 0; font-size: 16px; color: #1e293b;">Total con descuento: <strong>Q<span id="totalFinal">0.00</span></strong></p>
+                  </div>
+                  <button class="btn-primary" onclick="ui.abrirModalCobro()" style="background: #1E8449; padding: 12px 25px; font-size: 15px; border-radius: 6px;">
+                    <i class="fa-solid fa-cash-register"></i> Cobrar
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- EXÁMENES -->
+      <div id="userExamenes" class="user-view hidden">
+        <div class="sat-card">
+          <div class="sat-card-header"><span>Catálogo de Exámenes</span><i class="fa-solid fa-flask"></i></div>
+          <div class="sat-card-body">
+            <div class="form-horizontal">
+              <input id="exCod" placeholder="Código">
+              <input id="exNom" placeholder="Nombre del examen">
+              <input id="exPre" type="number" placeholder="Precio Q" min="0" step="0.01">
+              <button onclick="agregarExamen()" class="btn-primary" style="background:#1E8449;">
+                <i class="fa-solid fa-plus"></i> Agregar
+              </button>
+            </div>
+            <input placeholder="Buscar examen..." onkeyup="buscarTabla(this,'tablaExamenes')" style="max-width:400px;">
+            <div class="table-container" style="margin-top:15px;">
+              <table id="tablaExamenes">
+                <thead>
+                  <tr>
+                    <th>Código</th>
+                    <th>Nombre</th>
+                    <th>Precio</th>
+                    <th>Machote</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SEGUROS -->
+      <div id="userSeguros" class="user-view hidden">
+        <div class="sat-card" style="margin-bottom: 20px;">
+          <div class="sat-card-header"><span>Agregar Seguro</span><i class="fa-solid fa-shield-halved"></i></div>
+          <div class="sat-card-body">
+            <div class="form-horizontal">
+              <input id="segCodigo" placeholder="Código Seguro">
+              <input id="segNombre" placeholder="Nombre del Seguro">
+              <input id="segDescuento" type="number" placeholder="% Descuento" min="0" max="100" step="0.1">
+              <button onclick="agregarSeguro()" class="btn-primary" style="background:#1E8449;">
+                <i class="fa-solid fa-plus"></i> Agregar Seguro
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="sat-card">
+          <div class="sat-card-header"><span>Lista de Seguros</span><i class="fa-solid fa-list"></i></div>
+          <div class="sat-card-body">
+            <input placeholder="Filtrar seguros..." onkeyup="buscarTabla(this,'tablaSeguros')" style="width:100%; max-width:400px; margin-bottom:15px;">
+            <div class="table-container" style="margin-top:0;">
+              <table id="tablaSeguros">
+                <thead><tr><th>Código</th><th>Nombre</th><th>% Descuento</th><th>Acciones</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SOLICITAR RESULTADOS (SOLO DOCTOR) -->
+      <div id="userSolicitar" class="user-view hidden">
+        <div class="sat-card">
+          <div class="sat-card-header"><span>Solicitar Resultados a Laboratorio</span><i class="fa-solid fa-file-prescription"></i></div>
+          <div class="sat-card-body">
+            <p style="margin-bottom: 15px; color: var(--text-light);">Ingrese el nombre del paciente para enviar la solicitud a Recepción / Laboratorio.</p>
+            <div style="display: flex; gap: 10px;">
+              <input type="text" id="solicitudPaciente" placeholder="Nombre del paciente" style="flex: 1; margin-bottom: 0;">
+              <button class="btn-primary" onclick="ui.crearSolicitud()" style="background:#1E8449;">Enviar Solicitud</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MIS SOLICITUDES (SOLO DOCTOR) -->
+      <div id="userMisSolicitudes" class="user-view hidden">
+        <div class="sat-card" id="vistaTablaMisSolicitudes">
+          <div class="sat-card-header"><span>Mis Solicitudes de Resultados</span><i class="fa-solid fa-list-check"></i></div>
+          <div class="sat-card-body">
+            <div class="table-container" style="margin-top:0;">
+              <table id="tablaMisSolicitudes">
+                <thead><tr><th>Paciente</th><th>Fecha</th><th>Estado</th><th>Resultado</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="sat-card hidden" id="vistaTablaResultadosDoctor">
+          <div class="sat-card-header">
+            <span>Resultados Recibidos</span>
+            <button onclick="document.getElementById('vistaTablaResultadosDoctor').classList.add('hidden'); document.getElementById('vistaTablaMisSolicitudes').classList.remove('hidden');" style="background:none; color:white; font-size:14px;">
+              <i class="fa-solid fa-arrow-left"></i> Volver
+            </button>
+          </div>
+          <div class="sat-card-body" id="contenidoTablaResultadosDoctor"></div>
+        </div>
+      </div>
+
+      <!-- COLABORACIONES (RECEPCIÓN / LAB) -->
+      <div id="userColaboraciones" class="user-view hidden">
+        <div class="sat-card" id="vistaDoctoresColaboraciones">
+          <div class="sat-card-header"><span>Solicitudes por Doctor</span><i class="fa-solid fa-handshake-angle"></i></div>
+          <div class="sat-card-body">
+            <p style="margin-bottom: 15px; color: var(--text-light);">Seleccione un doctor para ver sus solicitudes de resultados pendientes.</p>
+            <div class="table-container" style="margin-top:0;">
+              <table id="tablaColaboracionesDoctores">
+                <thead><tr><th>Doctor</th><th>Solicitudes Pendientes</th><th>Acciones</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="sat-card hidden" id="vistaDetalleColaboraciones">
+          <div class="sat-card-header">
+            <span>Solicitudes del Doctor: <span id="nombreDoctorColab"></span></span>
+            <button onclick="ui.volverListaDoctores()" style="background:none; color:white; font-size:14px;"><i class="fa-solid fa-arrow-left"></i> Volver</button>
+          </div>
+          <div class="sat-card-body">
+            <div class="table-container" style="margin-top:0;">
+              <table id="tablaSolicitudesDoctor">
+                <thead><tr><th>Paciente</th><th>Fecha</th><th>Estado</th><th>Acciones</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DOCTORES -->
+      <div id="userDoctores" class="user-view hidden">
+        <div class="sat-card" style="margin-bottom: 20px;">
+          <div class="sat-card-header"><span>Afiliar Nuevo Doctor</span><i class="fa-solid fa-user-plus"></i></div>
+          <div class="sat-card-body">
+            <div class="form-horizontal">
+              <input id="docDpi" placeholder="DPI">
+              <input id="docNombre" placeholder="Nombre Completo">
+              <input id="docEsp" placeholder="Especialidad">
+              <button onclick="agregarDoctor()" class="btn-primary" style="background:#1E8449;">Afiliar Doctor</button>
+            </div>
+          </div>
+        </div>
+        <div class="sat-card">
+          <div class="sat-card-header"><span>Lista de Doctores Afiliados</span><i class="fa-solid fa-list"></i></div>
+          <div class="sat-card-body">
+            <input placeholder="Filtrar doctores..." onkeyup="buscarTabla(this,'tablaDoctores')" style="width:100%; max-width:400px; margin-bottom:15px;">
+            <div class="table-container" style="margin-top:0;">
+              <table id="tablaDoctores">
+                <thead><tr><th>DPI</th><th>Nombre</th><th>Especialidad</th><th>Estado</th><th>Acción</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- REPORTES -->
+      <div id="userReportes" class="user-view hidden">
+        <div class="sat-card">
+          <div class="sat-card-header"><span>Reportes y Comisiones</span><i class="fa-solid fa-chart-pie"></i></div>
+          <div class="sat-card-body">
+            <div class="tabs">
+              <button class="tab-btn active" data-tab="comisiones" onclick="ui.cambiarTabReportes('comisiones')">📊 Comisiones</button>
+              <button class="tab-btn" data-tab="graficoDoctores" onclick="ui.cambiarTabReportes('graficoDoctores')">📈 Órdenes por Doctor</button>
+              <button class="tab-btn" data-tab="graficoUsuarios" onclick="ui.cambiarTabReportes('graficoUsuarios')">🥧 Órdenes por Usuario</button>
+            </div>
+
+            <div id="tab-reportes-comisiones" class="tab-pane active">
+              <div style="background:white; padding:20px; border-radius:8px; margin-bottom:20px; display:flex; gap:20px; align-items:center; flex-wrap:wrap;">
+                <label style="display:flex; align-items:center; gap:8px;">Porcentaje de comisión:
+                  <input type="number" id="porcentajeComision" min="0" max="100" placeholder="10" oninput="ui.cargarReportes()" style="width:80px; margin:0;"> %
+                </label>
+                
+                <!-- FILTRO POR DOCTOR -->
+                <label style="display:flex; align-items:center; gap:8px;">Filtrar por Doctor:
+                  <select id="filtroReporteDoctor" onchange="ui.cargarReportes()" style="width: 200px; margin: 0;">
+                    <option value="todos">Todos los Doctores</option>
+                  </select>
+                </label>
+
+                <div style="display:flex; gap:10px;">
+                  <button class="btn-primary" onclick="ui.imprimirReporte()" style="background:#3498db;">Imprimir Reporte</button>
+                  <button class="btn-primary" onclick="ui.enviarReporte()" style="background:#e74c3c;">Enviar por Correo</button>
+                </div>
+              </div>
+              <div class="table-container">
+                <table id="tablaReportes">
+                  <thead><tr><th>Doctor</th><th>N° Pacientes</th><th>Monto Total (Q)</th><th>Comisión (Q)</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div id="tab-reportes-graficoDoctores" class="tab-pane">
+              <div class="chart-container">
+                <canvas id="ordenesChartDoctores"></canvas>
+              </div>
+            </div>
+
+            <div id="tab-reportes-graficoUsuarios" class="tab-pane">
+              <div class="chart-container">
+                <canvas id="usuariosPieChart"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BITÁCORA / CIERRE DE CAJA (SECRETARIA) -->
+      <div id="userBitacora" class="user-view hidden">
+        <div class="sat-card" style="margin-bottom: 20px;">
+          <div class="sat-card-header"><span>Cierre de Caja</span><i class="fa-solid fa-cash-register"></i></div>
+          <div class="sat-card-body">
+            <div style="display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap;">
+              <button class="btn-primary" onclick="ui.cerrarCaja()" style="background: #1E8449;">
+                <i class="fa-solid fa-lock"></i> Cerrar Caja del Día
+              </button>
+              <button class="btn-primary" onclick="ui.exportarExcelOrdenes()" style="background: #3498db;">
+                <i class="fa-solid fa-file-excel"></i> Exportar Órdenes a Excel
+              </button>
+              <button class="btn-primary" onclick="ui.imprimirBitacora()" style="background: #E67E22;">
+                <i class="fa-solid fa-print"></i> Imprimir Bitácora
+              </button>
+            </div>
+
+            <div class="summary-grid" style="margin-bottom: 0;">
+              <div class="summary-card">
+                <h4>Total del Día</h4>
+                <div class="value" id="cajaTotalDia">Q 0.00</div>
+                <div class="sub-text">Órdenes de hoy</div>
+              </div>
+              <div class="summary-card">
+                <h4>Total del Mes</h4>
+                <div class="value" id="cajaTotalMes">Q 0.00</div>
+                <div class="sub-text" id="cajaMesLabel">Mes actual</div>
+              </div>
+              <div class="summary-card">
+                <h4>Total Acumulado</h4>
+                <div class="value" id="cajaTotalAcumulado">Q 0.00</div>
+                <div class="sub-text">Histórico completo</div>
+              </div>
+              <div class="summary-card">
+                <h4>Cierres Registrados</h4>
+                <div class="value" id="cajaNumCierres">0</div>
+                <div class="sub-text">En este mes</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sat-card">
+          <div class="sat-card-header">
+            <span>Historial de Cierres de Caja</span>
+            <div style="display: flex; gap: 15px; align-items: center;">
+              <button onclick="ui.mostrarPapelera()" style="background: none; border: none; color: white; font-size: 20px; cursor: pointer;" title="Papelera">
+                <i class="fa-solid fa-trash"></i>
+              </button>
+              <i class="fa-solid fa-clock-rotate-left" style="font-size: 20px;"></i>
+            </div>
+          </div>
+          <div class="sat-card-body">
+            <div style="margin-bottom: 15px;">
+              <label style="display:flex; align-items:center; gap:8px; font-size:13px;">Filtrar por mes:
+                <input type="month" id="filtroMesCaja" onchange="ui.renderBitacora()" style="width:auto; margin:0;">
+              </label>
+            </div>
+            <div class="table-container" style="margin-top: 0; overflow-x: auto;">
+              <table id="tablaBitacora">
+                <thead>
+                  <tr>
+                    <th>No. Cierre</th>
+                    <th>Total en caja</th>
+                    <th>No. Pacientes</th>
+                    <th>Exámenes Realizados</th>
+                    <th>Pagos con tarjeta (Cant.)</th>
+                    <th>Saldo por tarjeta</th>
+                    <th>Pagos en efectivo (Cant.)</th>
+                    <th>Saldo de efectivo</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div id="cajaResumenMes" style="margin-top: 15px; padding: 15px; background: #f1f5f9; border-radius: 8px;">
+              <strong>Resumen del mes seleccionado:</strong>
+              <span id="cajaResumenMesText" style="margin-left: 10px;">—</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PERFIL Y SEGURIDAD -->
+      <div id="userPerfil" class="user-view hidden">
+        <div class="sat-card" style="margin-bottom: 20px;">
+          <div class="sat-card-header"><span>Mi Perfil</span><i class="fa-solid fa-user"></i></div>
+          <div class="sat-card-body">
+            <div style="display: flex; gap: 30px; align-items: flex-start; flex-wrap: wrap;">
+              
+              <!-- Lado Izquierdo: Foto -->
+              <div style="text-align: center; width: 130px;">
+                <div id="perfilFotoContainer" style="width: 120px; height: 120px; border-radius: 50%; background: #e2e8f0; display: flex; align-items: center; justify-content: center; overflow: hidden; margin: 0 auto 10px; border: 3px solid var(--secondary-blue); cursor: pointer; position: relative;" onclick="ui.verFotoPerfil()" title="Ver foto">
+                  <i class="fa-solid fa-user" style="font-size: 50px; color: #94a3b8;"></i>
+                </div>
+                
+                <label class="btn-primary" style="background: #3498db; padding: 6px 12px; font-size: 13px; cursor: pointer; display: block; width: 100%; border-radius: 6px; margin-bottom: 5px;">
+                  <i class="fa-solid fa-camera"></i> Subir Foto
+                  <input type="file" id="perfilFotoInput" accept="image/*" style="display: none;" onchange="ui.subirFotoPerfil(event)">
+                </label>
+                
+                <button id="btnEliminarFoto" class="btn-danger" onclick="ui.eliminarFotoPerfil()" style="display: none; padding: 6px 12px; font-size: 13px; border-radius: 6px; width: 100%;">
+                  <i class="fa-solid fa-trash"></i> Eliminar Foto
+                </button>
+              </div>
+              
+              <!-- Lado Derecho: Datos -->
+              <div style="flex: 1; min-width: 250px; padding-top: 10px; display: flex; flex-direction: column; justify-content: space-between; min-height: 140px;">
+                <div>
+                  <h3 style="margin-bottom: 15px; color: var(--primary-blue);">Datos Personales</h3>
+                  <p style="margin-bottom: 8px; font-size: 15px;"><strong>Nombre:</strong> <span id="perfilNombre">Usuario</span></p>
+                  <p style="margin-bottom: 8px; font-size: 15px;"><strong>Usuario:</strong> <span id="perfilUsername">usuario</span></p>
+                  <p style="margin-bottom: 8px; font-size: 15px;"><strong>Rol:</strong> <span id="perfilRol">Rol</span></p>
+                </div>
+                
+                <div style="text-align: right; margin-top: 15px;">
+                  <button class="btn-primary" onclick="ui.abrirModalContrasena()" style="background:#1E8449; padding: 10px 20px; font-size: 14px; border-radius: 6px; display: inline-flex; align-items: center; gap: 8px;">
+                    <i class="fa-solid fa-key"></i> Actualizar Contraseña
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+      
+    </div>
+  </section>
+
+  <!-- ================= MODALES GLOBALES (Fuera de Admin y User para que funcionen en ambos) ================= -->
+  <div id="modalDetalles" class="modal hidden">
+    <div class="modal-hoja">
+      <div class="modal-header no-print">
+        <h2>Vista Previa de Impresión</h2>
+        <div style="display: flex; gap: 10px;">
+          <button onclick="ui.editarDatosDesdeModal()" id="btnEditarDatosModal" class="btn-primary" style="display: none; background: #E67E22; color: white; padding: 5px 10px; font-size: 14px;"><i class="fa-solid fa-pen"></i> Editar Datos</button>
+          <button onclick="cerrarModal()" style="font-size: 20px; background: none; padding: 5px;">✖</button>
+        </div>
+      </div>
+      <div id="contenidoOrden" class="print-preview-container"></div>
+      <div class="modal-footer no-print">
+        <button onclick="window.print()" class="btn-primary" style="background:#1E8449; color:white;"><i class="fa-solid fa-print"></i> Imprimir / Descargar PDF</button>
+        <button onclick="cerrarModal()" style="background:#cbd5e1; color:#334155;">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modalResultados" class="modal hidden">
+    <div class="modal-hoja" style="max-width: 700px;">
+      <div class="modal-header no-print">
+        <h2>Ingresar Resultados</h2>
+        <button onclick="cerrarModalResultados()">✖</button>
+      </div>
+      <div id="contenidoResultados"></div>
+      <div class="modal-footer no-print">
+        <button onclick="ui.procesarGuardarResultados()" class="btn-primary" style="background:#1E8449;">Guardar Resultados</button>
+        <button onclick="cerrarModalResultados()">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modalCobro" class="modal hidden">
+    <div class="modal-hoja" style="max-width: 480px;">
+      <div class="modal-header no-print" style="padding: 10px 15px;">
+        <h2>Opciones de Cobro</h2>
+        <button onclick="cerrarModalCobro()">✖</button>
+      </div>
+
+      <div class="sat-card-body" style="padding: 12px 15px;">
+        <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+          <button id="btn-pago-tarjeta" class="btn-primary" onclick="ui.seleccionarMetodoPago('Tarjeta')" style="flex:1; background:#3b82f6; padding: 10px 8px; font-size: 13px; border: 2px solid transparent; border-radius: 6px;">Tarjeta de Crédito/Débito</button>
+          <button id="btn-pago-efectivo" class="btn-primary" onclick="ui.seleccionarMetodoPago('Efectivo')" style="flex:1; background:#64748b; padding: 10px 8px; font-size: 13px; border: 2px solid transparent; border-radius: 6px;">Efectivo</button>
+        </div>
+
+        <div id="pagoRecargoContainer" class="hidden" style="margin-bottom: 10px;">
+          <label style="font-weight: 500; font-size: 13px; color: #475569; margin-bottom: 2px; display: block;">Recargo opcional (%)</label>
+          <input type="number" id="recargoPago" placeholder="0" min="0" oninput="ui.actualizarCalculoPago()" style="padding: 8px 10px; font-size: 14px; margin-bottom: 0;">
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; font-size: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Total a pagar:</span>
+            <strong id="cobroTotalBase" style="font-size: 15px;">Q0.00</strong>
+          </div>
+          <div id="recargoVisualContainer" class="hidden" style="display: flex; justify-content: space-between; align-items: center; color: var(--warning);">
+            <span>Recargo:</span>
+            <strong id="cobroRecargoVisual" style="font-size: 15px;">Q0.00</strong>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 16px; border-top: 1px dashed #cbd5e1; padding-top: 8px; margin-top: 2px;">
+            <span><strong>Total Final:</strong></span>
+            <strong id="cobroTotalFinal" style="color: var(--primary-blue); font-size: 18px;">Q0.00</strong>
+          </div>
+        </div>
+
+        <div style="margin-bottom: 10px;">
+          <label style="font-size: 13px; color: #475569; margin-bottom: 2px; display: block;">Recibido</label>
+          <input type="number" id="pagoRecibido" placeholder="0.00" oninput="ui.actualizarCalculoPago()" step="0.01" style="padding: 8px 10px; font-size: 15px; margin-bottom: 0;">
+        </div>
+
+        <div style="margin-bottom: 0;">
+          <label style="font-size: 13px; color: #475569; margin-bottom: 2px; display: block;">Cambio</label>
+          <input type="text" id="pagoCambio" readonly value="0.00" style="background: #e2e8f0; font-weight: bold; color: var(--success); font-size: 18px; padding: 8px 10px; margin-bottom: 0;">
+        </div>
+      </div>
+
+      <div class="modal-footer no-print" style="padding: 10px 15px;">
+        <button class="btn-primary" onclick="window.procesarGuardarOrdenConPago()" style="background: #1E8449; width: 100%; font-size: 15px; padding: 10px; border-radius: 6px;">
+          Confirmar y Generar Orden
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modalMachote" class="modal hidden">
+    <div class="modal-hoja" style="max-width: 900px;">
+      <div class="modal-header no-print">
+        <h2 id="modalMachoteTitle">Editar Machote</h2>
+        <button onclick="document.getElementById('modalMachote').classList.add('hidden')">✖</button>
+      </div>
+      <div class="sat-card-body" style="padding: 20px;">
+        <div class="tabs" style="margin-bottom: 15px;">
+          <button class="tab-btn active" onclick="ui.cambiarTabMachote('M', event)">HOMBRE (M)</button>
+          <button class="tab-btn" onclick="ui.cambiarTabMachote('F', event)">MUJER (F)</button>
+          <button class="tab-btn" onclick="ui.cambiarTabMachote('N', event)">NIÑO (N)</button>
+        </div>
+        
+        <div id="machoteTabM" class="tab-pane active machote-pane">
+          <table class="table-machote-edit" style="width:100%; margin-bottom:15px;">
+            <thead><tr><th>Análisis / Determinación</th><th>Referencia</th><th style="width: 50px;">Acción</th></tr></thead>
+            <tbody id="tbodyMachoteM"></tbody>
+          </table>
+          <button onclick="ui.agregarFilaMachote('M')" class="btn-primary" style="font-size:12px; padding:5px 10px; background:#3498db;"><i class="fa-solid fa-plus"></i> Agregar Fila</button>
+        </div>
+        
+        <div id="machoteTabF" class="tab-pane machote-pane" style="display:none;">
+          <table class="table-machote-edit" style="width:100%; margin-bottom:15px;">
+            <thead><tr><th>Análisis / Determinación</th><th>Referencia</th><th style="width: 50px;">Acción</th></tr></thead>
+            <tbody id="tbodyMachoteF"></tbody>
+          </table>
+          <button onclick="ui.agregarFilaMachote('F')" class="btn-primary" style="font-size:12px; padding:5px 10px; background:#3498db;"><i class="fa-solid fa-plus"></i> Agregar Fila</button>
+        </div>
+        
+        <div id="machoteTabN" class="tab-pane machote-pane" style="display:none;">
+          <table class="table-machote-edit" style="width:100%; margin-bottom:15px;">
+            <thead><tr><th>Análisis / Determinación</th><th>Referencia</th><th style="width: 50px;">Acción</th></tr></thead>
+            <tbody id="tbodyMachoteN"></tbody>
+          </table>
+          <button onclick="ui.agregarFilaMachote('N')" class="btn-primary" style="font-size:12px; padding:5px 10px; background:#3498db;"><i class="fa-solid fa-plus"></i> Agregar Fila</button>
+        </div>
+      </div>
+      <div class="modal-footer no-print">
+        <button onclick="ui.guardarMachote()" class="btn-primary" style="background:#1E8449;">Guardar Cambios</button>
+        <button onclick="document.getElementById('modalMachote').classList.add('hidden')" style="background:#cbd5e1; color:#334155;">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
