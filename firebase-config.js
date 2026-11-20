@@ -7,7 +7,7 @@ import { getFirestore } from "https://www.gstatic.com/firebasejs/10.7.1/firebase
 
 // Tu configuración de Firebase (obtenida de la consola)
 const firebaseConfig = {
-  apiKey: "AIzaSyCI_Ku1ULyRMtKtIrlWsUovyFGdtU2JArU",
+  apiKey: "AIzaSyCpU1ZqlEmA5gnWRwS3IPjCUXBdFl2iiHM",
   authDomain: "sistema-lab-d9465.firebaseapp.com",
   projectId: "sistema-lab-d9465",
   storageBucket: "sistema-lab-d9465.firebasestorage.app",

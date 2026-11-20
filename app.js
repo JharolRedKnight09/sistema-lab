@@ -7,19 +7,6 @@
 })();
 
 class Database {
-  static save(key, data) {
-    try {
-      localStorage.setItem(key, JSON.stringify(data));
-    } catch (e) {
-      if (e.name === 'QuotaExceededError') {
-        Swal.fire("Error", "El archivo es demasiado grande para guardarlo localmente (Límite de 5MB). Intente con una imagen más pequeña.", "error");
-      } else {
-        console.error("Error guardando en BD:", e);
-      }
-      throw e;
-    }
-  }
-
   static load(key, defaultValue = null) {
     try {
       const data = localStorage.getItem(key);
@@ -30,7 +17,74 @@ class Database {
   }
 }
 
-let solicitudes = Database.load("solicitudes", []);
+async function loadCollectionWithLegacy(collectionName, storageKey, idField) {
+  const marker = `lab_firestore_migrated_${collectionName}`;
+  const remoteData = await window.firestore.loadAll(collectionName);
+  if (localStorage.getItem(marker)) return remoteData;
+
+  const legacyData = Database.load(storageKey, []);
+  if (remoteData.length === 0 && legacyData.length > 0) {
+    const migratedData = legacyData.map(item => ({ ...item }));
+    let maxId = idField === "correlativo"
+      ? migratedData.reduce((max, item) => Math.max(max, Number(item[idField]) || 0), 0)
+      : 0;
+    migratedData.forEach((item, index) => {
+      if (item[idField] === undefined || item[idField] === null || item[idField] === "") {
+        item[idField] = idField === "correlativo"
+          ? ++maxId
+          : `${Date.now()}_${index}_${Math.random().toString(36).slice(2)}`;
+      }
+    });
+    await window.firestore.saveAll(collectionName, migratedData, idField);
+    localStorage.setItem(marker, "true");
+    return window.firestore.loadAll(collectionName);
+  }
+
+  localStorage.setItem(marker, "true");
+  return remoteData;
+}
+
+async function loadDocumentWithLegacy(collectionName, documentId, storageKey) {
+  const marker = `lab_firestore_migrated_${collectionName}`;
+  const remoteData = await window.firestore.load(collectionName, documentId);
+  if (localStorage.getItem(marker)) return remoteData;
+
+  const legacyData = Database.load(storageKey);
+  if (remoteData === null && legacyData !== null) {
+    await window.firestore.save(collectionName, documentId, legacyData);
+    localStorage.setItem(marker, "true");
+    return legacyData;
+  }
+
+  localStorage.setItem(marker, "true");
+  return remoteData;
+}
+
+async function loadUsersWithLegacy() {
+  const marker = "lab_firestore_migrated_users";
+  const remoteUsers = await window.firestore.getUsers();
+  if (localStorage.getItem(marker)) {
+    return Object.fromEntries(remoteUsers.map(({ id, ...user }) => [id, user]));
+  }
+
+  const legacyUsers = Database.load("lab_users", AuthManager.defaultUsers);
+  if (remoteUsers.length === 0) {
+    const users = Object.entries(legacyUsers).map(([id, user]) => ({ id, ...user }));
+    await window.firestore.saveAll("users", users, "id");
+    localStorage.setItem(marker, "true");
+    return legacyUsers;
+  }
+
+  localStorage.setItem(marker, "true");
+  return Object.fromEntries(remoteUsers.map(({ id, ...user }) => [id, user]));
+}
+
+function showSyncError(error) {
+  console.error("Error sincronizando con Firestore:", error);
+  return Swal.fire("Error de sincronización", error.message || "No se pudieron guardar los cambios.", "error");
+}
+
+let solicitudes = [];
 
 // ============================================================================
 // 2. MODELO DE NEGOCIO
@@ -39,22 +93,30 @@ let solicitudes = Database.load("solicitudes", []);
 class LaboratoryManager {
   constructor() {
     this.doctores = [];
-    this.examenes = Database.load("examenes", []);
-    this.ordenes  = Database.load("ordenes", []);
-    this.seguros  = Database.load("seguros", []);
-    this.caja     = Database.load("caja", { cierres: [], papeleraCierres: [], mesActual: null });
+    this.examenes = [];
+    this.ordenes = [];
+    this.seguros = [];
+    this.caja = { cierres: [], papeleraCierres: [], mesActual: null };
 
-    this.limpiarExamenesDuplicados();
-    this.inicializarCaja();
-    this.repararCorrelativos();
-    this.inicializarMachotes();
   }
 
   async init() {
-    this.doctores = await window.firestore.getDoctores();
+    this.doctores = await loadCollectionWithLegacy("doctores", "doctores", "dpi");
+    this.examenes = await loadCollectionWithLegacy("examenes", "examenes", "codigo");
+    this.ordenes = await loadCollectionWithLegacy("ordenes", "ordenes", "correlativo");
+    this.seguros = await loadCollectionWithLegacy("seguros", "seguros", "codigo");
+    const cajaData = await loadDocumentWithLegacy("caja", "config", "caja");
+    if (cajaData) this.caja = cajaData;
+
+    await this.inicializarMachotes();
+    await this.limpiarExamenesDuplicados();
+    await this.inicializarCaja();
+    await this.repararCorrelativos();
+    const hoy = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
+    await window.firestore.initializeOrderCounters(this.ordenes, hoy);
   }
 
-  inicializarMachotes() {
+  async inicializarMachotes() {
     if (this.examenes.length === 0 || !this.examenes.some(e => e.codigo === "HEMA")) {
       if (!this.examenes.some(e => e.codigo === "HEMA")) {
         const machoteM = [
@@ -109,23 +171,25 @@ class LaboratoryManager {
           { parametro: "RECUENTO DE PLAQUETAS", referencia: "100,000 - 500,000 cel/mm3" }
         ];
 
-        this.examenes.push({
+        const examen = {
           codigo: "HEMA",
           nombre: "HEMATOLOGÍA COMPLETA",
           precio: 100,
           descripcion: "Hemograma completo con fórmula diferencial.",
           parametros: [],
           machotes: { M: machoteM, F: machoteF, N: machoteN }
-        });
-        Database.save("examenes", this.examenes);
+        };
+        await window.firestore.saveExamen(examen.codigo, examen);
+        this.examenes.push(examen);
       }
     }
   }
 
-  inicializarCaja() {
+  async inicializarCaja() {
     const ahora = new Date();
     const mesActual = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}`;
 
+    let changed = false;
     if (!Array.isArray(this.caja.cierres)) {
       const cierres = [];
       if (Array.isArray(this.caja.movimientos)) {
@@ -149,59 +213,86 @@ class LaboratoryManager {
         });
       }
       this.caja = { mesActual, cierres, papeleraCierres: [] };
-      Database.save("caja", this.caja);
+      changed = true;
     } else {
       if (!Array.isArray(this.caja.papeleraCierres)) {
         this.caja.papeleraCierres = [];
+        changed = true;
       }
       if (this.caja.mesActual !== mesActual) {
         this.caja.mesActual = mesActual;
-        Database.save("caja", this.caja);
+        changed = true;
       }
     }
+    if (changed) await window.firestore.saveCaja(this.caja);
   }
 
-  limpiarExamenesDuplicados() {
-    const mapa = {};
-    this.examenes = this.examenes.filter(e => {
-      if (mapa[e.codigo]) return false;
-      mapa[e.codigo] = true;
-      return true;
-    });
-    Database.save("examenes", this.examenes);
+  async limpiarExamenesDuplicados() {
+    const codigos = new Set();
+    const examenesUnicos = [];
+    for (const examen of this.examenes) {
+      if (codigos.has(examen.codigo)) {
+        if (examen.id && String(examen.id) !== String(examen.codigo)) {
+          await window.firestore.deleteExamen(examen.id);
+        }
+      } else {
+        codigos.add(examen.codigo);
+        examenesUnicos.push(examen);
+      }
+    }
+    this.examenes = examenesUnicos;
   }
 
-  repararCorrelativos() {
+  async repararCorrelativos() {
     let maxCorrelativo = 0;
     this.ordenes.forEach(o => {
       if (o.correlativo && Number(o.correlativo) > maxCorrelativo) {
         maxCorrelativo = Number(o.correlativo);
       }
     });
-    this.ordenes.forEach(o => {
-      if (!o.correlativo) {
+    for (const orden of this.ordenes) {
+      if (!orden.correlativo) {
         maxCorrelativo++;
-        o.correlativo = maxCorrelativo;
+        const idAnterior = orden.id;
+        const ordenActualizada = { ...orden, correlativo: maxCorrelativo };
+        if (idAnterior && String(idAnterior) !== String(maxCorrelativo)) {
+          await window.firestore.move("ordenes", idAnterior, maxCorrelativo, ordenActualizada);
+        } else {
+          await window.firestore.saveOrden(maxCorrelativo, ordenActualizada);
+        }
+        Object.assign(orden, ordenActualizada, { id: String(maxCorrelativo) });
       }
-    });
-    Database.save("ordenes", this.ordenes);
+    }
   }
 
   // ===== Exámenes =====
-  agregarExamen(codigo, nombre, precio, descripcion = "") {
+  async agregarExamen(codigo, nombre, precio, descripcion = "") {
     if (this.examenes.some(ex => ex.codigo === codigo)) throw new Error("El código ya existe.");
-    this.examenes.push({ codigo, nombre, precio: Number(precio), descripcion, parametros: [], machotes: null });
-    Database.save("examenes", this.examenes);
+    const examen = { codigo, nombre, precio: Number(precio), descripcion, parametros: [], machotes: null };
+    await window.firestore.saveExamen(codigo, examen);
+    const index = this.examenes.findIndex(ex => ex.codigo === codigo);
+    if (index === -1) this.examenes.push(examen);
+    else this.examenes[index] = examen;
   }
 
-  actualizarExamen(index, nuevosDatos) {
-    this.examenes[index] = { ...this.examenes[index], ...nuevosDatos };
-    Database.save("examenes", this.examenes);
+  async actualizarExamen(index, nuevosDatos) {
+    const ex = this.examenes[index];
+    const datosActualizados = { ...ex, ...nuevosDatos };
+    if (datosActualizados.codigo !== ex.codigo) {
+      await window.firestore.move("examenes", ex.codigo, datosActualizados.codigo, datosActualizados);
+    } else {
+      await window.firestore.saveExamen(ex.codigo, datosActualizados);
+    }
+    this.examenes = this.examenes.filter(item =>
+      item.codigo !== ex.codigo && item.codigo !== datosActualizados.codigo
+    );
+    this.examenes.push(datosActualizados);
   }
 
-  eliminarExamen(index) {
-    this.examenes.splice(index, 1);
-    Database.save("examenes", this.examenes);
+  async eliminarExamen(index) {
+    const ex = this.examenes[index];
+    await window.firestore.deleteExamen(ex.codigo);
+    this.examenes = this.examenes.filter(item => item.codigo !== ex.codigo);
   }
 
   // ===== Doctores =====
@@ -209,52 +300,70 @@ class LaboratoryManager {
     if (this.doctores.some(d => d.dpi === dpi)) throw new Error("Ya existe un doctor con ese DPI.");
     const doctor = { dpi, nombre, especialidad, activo: true };
     await window.firestore.saveDoctor(dpi, doctor);
-    this.doctores.push(doctor);
+    const index = this.doctores.findIndex(d => d.dpi === dpi);
+    if (index === -1) this.doctores.push(doctor);
+    else this.doctores[index] = doctor;
   }
 
   async actualizarDoctor(index, nuevosDatos) {
     const doc = this.doctores[index];
     const datosActualizados = { ...doc, ...nuevosDatos };
-    await window.firestore.saveDoctor(doc.dpi, datosActualizados);
-    this.doctores[index] = datosActualizados;
+    if (datosActualizados.dpi !== doc.dpi) {
+      await window.firestore.move("doctores", doc.dpi, datosActualizados.dpi, datosActualizados);
+    } else {
+      await window.firestore.saveDoctor(doc.dpi, datosActualizados);
+    }
+    this.doctores = this.doctores.filter(item =>
+      item.dpi !== doc.dpi && item.dpi !== datosActualizados.dpi
+    );
+    this.doctores.push(datosActualizados);
   }
 
   async eliminarDoctor(index) {
     const doc = this.doctores[index];
     await window.firestore.deleteDoctor(doc.dpi);
-    this.doctores.splice(index, 1);
+    this.doctores = this.doctores.filter(item => item.dpi !== doc.dpi);
   }
 
   // ===== Seguros =====
-  agregarSeguro(codigo, nombre, descuento) {
+  async agregarSeguro(codigo, nombre, descuento) {
     if (this.seguros.some(s => s.codigo === codigo)) throw new Error("El código de seguro ya existe.");
-    this.seguros.push({ codigo, nombre, descuento: Number(descuento) });
-    Database.save("seguros", this.seguros);
+    const seguro = { codigo, nombre, descuento: Number(descuento) };
+    await window.firestore.saveSeguro(codigo, seguro);
+    const index = this.seguros.findIndex(s => s.codigo === codigo);
+    if (index === -1) this.seguros.push(seguro);
+    else this.seguros[index] = seguro;
   }
 
-  actualizarSeguro(index, nuevosDatos) {
-    this.seguros[index] = { ...this.seguros[index], ...nuevosDatos };
-    Database.save("seguros", this.seguros);
+  async actualizarSeguro(index, nuevosDatos) {
+    const s = this.seguros[index];
+    const datosActualizados = { ...s, ...nuevosDatos };
+    if (datosActualizados.codigo !== s.codigo) {
+      await window.firestore.move("seguros", s.codigo, datosActualizados.codigo, datosActualizados);
+    } else {
+      await window.firestore.saveSeguro(s.codigo, datosActualizados);
+    }
+    this.seguros = this.seguros.filter(item =>
+      item.codigo !== s.codigo && item.codigo !== datosActualizados.codigo
+    );
+    this.seguros.push(datosActualizados);
   }
 
-  eliminarSeguro(index) {
-    this.seguros.splice(index, 1);
-    Database.save("seguros", this.seguros);
+  async eliminarSeguro(index) {
+    const s = this.seguros[index];
+    await window.firestore.deleteSeguro(s.codigo);
+    this.seguros = this.seguros.filter(item => item.codigo !== s.codigo);
   }
 
   // ===== Órdenes =====
-  crearOrden({ paciente, doctor, examenesSeleccionados, total, descuentoQ, totalOriginal, edad, tipoSeguro, clasificacion, metodoPago, recargoPct, recibido, cambio }) {
+  async crearOrden({ paciente, doctor, examenesSeleccionados, total, descuentoQ, totalOriginal, edad, tipoSeguro, clasificacion, metodoPago, recargoPct, recibido, cambio }) {
     const hoy = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
     
-    const ordenesHoy = this.ordenes.filter(o => o.fecha === hoy);
-    const nuevoNumero = ordenesHoy.length > 0 ? Math.max(...ordenesHoy.map(o => Number(o.numero) || 0)) + 1 : 1;
-    
     const maxCorrelativo = this.ordenes.length > 0 ? Math.max(...this.ordenes.map(o => Number(o.correlativo) || 0)) : 0;
-    const nuevoCorrelativo = maxCorrelativo + 1;
+    const ordenesHoy = this.ordenes.filter(o => o.fecha === hoy);
+    const maxNumero = ordenesHoy.length > 0 ? Math.max(...ordenesHoy.map(o => Number(o.numero) || 0)) : 0;
 
     const nuevaOrden = {
-      numero: nuevoNumero,
-      correlativo: nuevoCorrelativo,
       edad, fecha: hoy, paciente, doctor,
       tipoSeguro: tipoSeguro || "Ninguno",
       clasificacion: clasificacion || "M",
@@ -268,31 +377,38 @@ class LaboratoryManager {
       creadoPor: AuthManager.currentUser?.nombre || "desconocido"
     };
 
-    this.ordenes.push(nuevaOrden);
-    Database.save("ordenes", this.ordenes);
-    return nuevaOrden;
+    const orden = await window.firestore.createOrder(nuevaOrden, maxCorrelativo, maxNumero);
+    const index = this.ordenes.findIndex(o => Number(o.correlativo) === Number(orden.correlativo));
+    if (index === -1) this.ordenes.push(orden);
+    else this.ordenes[index] = orden;
+    return orden;
   }
 
-  actualizarDatosPaciente(correlativo, nuevosDatos) {
+  async actualizarDatosPaciente(correlativo, nuevosDatos) {
     const orden = this.buscarOrden(correlativo);
     if (orden) {
-      if (nuevosDatos.paciente) orden.paciente = nuevosDatos.paciente;
-      if (nuevosDatos.edad) orden.edad = nuevosDatos.edad;
-      Database.save("ordenes", this.ordenes);
+      const actualizada = {
+        ...orden,
+        paciente: nuevosDatos.paciente || orden.paciente,
+        edad: nuevosDatos.edad || orden.edad
+      };
+      await window.firestore.saveOrden(actualizada.correlativo, actualizada);
+      Object.assign(orden, actualizada);
     }
   }
 
-  guardarResultados(correlativo, resultados) {
+  async guardarResultados(correlativo, resultados) {
     const orden = this.buscarOrden(correlativo);
     if (orden) {
-      orden.resultados = resultados;
-      Database.save("ordenes", this.ordenes);
+      const actualizada = { ...orden, resultados };
+      await window.firestore.saveOrden(actualizada.correlativo, actualizada);
+      Object.assign(orden, actualizada);
     }
   }
 
-  eliminarOrden(correlativo) {
+  async eliminarOrden(correlativo) {
+    await window.firestore.deleteOrden(correlativo);
     this.ordenes = this.ordenes.filter(o => Number(o.correlativo) !== Number(correlativo));
-    Database.save("ordenes", this.ordenes);
   }
 
   buscarOrden(correlativo) {
@@ -300,7 +416,7 @@ class LaboratoryManager {
   }
 
   // ===== Caja =====
-  cerrarCaja(fecha, cerradoPor) {
+  async cerrarCaja(fecha, cerradoPor) {
     if (this.caja.cierres.some(c => c.fecha === fecha)) {
       throw new Error("Ya existe un cierre para esta fecha.");
     }
@@ -345,34 +461,49 @@ class LaboratoryManager {
       timestamp: Date.now()
     };
 
-    this.caja.cierres.push(cierre);
-    Database.save("caja", this.caja);
+    const cajaActualizada = { ...this.caja, cierres: [...this.caja.cierres, cierre] };
+    await window.firestore.saveCaja(cajaActualizada);
+    this.caja = cajaActualizada;
     return cierre;
   }
 
-  eliminarCierreSoft(id) {
+  async eliminarCierreSoft(id) {
     const index = this.caja.cierres.findIndex(c => c.id === id);
     if (index !== -1) {
-      const cierre = this.caja.cierres.splice(index, 1)[0];
+      const cierre = { ...this.caja.cierres[index] };
       cierre.eliminadoEn = new Date().toISOString();
-      this.caja.papeleraCierres.push(cierre);
-      Database.save("caja", this.caja);
+      const cajaActualizada = {
+        ...this.caja,
+        cierres: this.caja.cierres.filter(c => c.id !== id),
+        papeleraCierres: [...this.caja.papeleraCierres, cierre]
+      };
+      await window.firestore.saveCaja(cajaActualizada);
+      this.caja = cajaActualizada;
     }
   }
 
-  restaurarCierre(id) {
+  async restaurarCierre(id) {
     const index = this.caja.papeleraCierres.findIndex(c => c.id === id);
     if (index !== -1) {
-      const cierre = this.caja.papeleraCierres.splice(index, 1)[0];
+      const cierre = { ...this.caja.papeleraCierres[index] };
       delete cierre.eliminadoEn;
-      this.caja.cierres.push(cierre);
-      Database.save("caja", this.caja);
+      const cajaActualizada = {
+        ...this.caja,
+        cierres: [...this.caja.cierres, cierre],
+        papeleraCierres: this.caja.papeleraCierres.filter(c => c.id !== id)
+      };
+      await window.firestore.saveCaja(cajaActualizada);
+      this.caja = cajaActualizada;
     }
   }
 
-  eliminarCierreDefinitivo(id) {
-    this.caja.papeleraCierres = this.caja.papeleraCierres.filter(c => c.id !== id);
-    Database.save("caja", this.caja);
+  async eliminarCierreDefinitivo(id) {
+    const cajaActualizada = {
+      ...this.caja,
+      papeleraCierres: this.caja.papeleraCierres.filter(c => c.id !== id)
+    };
+    await window.firestore.saveCaja(cajaActualizada);
+    this.caja = cajaActualizada;
   }
 
   obtenerCierres(mes) {
@@ -611,19 +742,20 @@ class UIManager {
     Swal.fire({ title: 'Procesando imagen...', didOpen: () => Swal.showLoading(), allowOutsideClick: false });
 
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const base64 = e.target.result;
       const user = AuthManager.currentUser;
       if (user && AuthManager.users[user.username]) {
-        AuthManager.users[user.username].foto = base64;
         try {
-          Database.save('lab_users', AuthManager.users);
+          const updatedUser = { ...AuthManager.users[user.username], foto: base64 };
+          await window.firestore.saveUser(user.username, updatedUser);
+          AuthManager.users[user.username] = updatedUser;
           this.renderPerfil();
           this.actualizarNavbarFoto();
           Swal.close();
           Swal.fire("Éxito", "Foto de perfil actualizada.", "success");
         } catch (error) {
-          Swal.fire("Error", "La imagen es muy grande. Intente con una más pequeña.", "error");
+          showSyncError(error);
         }
       }
     };
@@ -659,15 +791,21 @@ class UIManager {
       confirmButtonText: 'Sí, eliminar',
       confirmButtonColor: '#e74c3c',
       cancelButtonText: 'Cancelar'
-    }).then((res) => {
+    }).then(async (res) => {
       if (res.isConfirmed) {
         const user = AuthManager.currentUser;
         if (user && AuthManager.users[user.username]) {
-          delete AuthManager.users[user.username].foto;
-          Database.save('lab_users', AuthManager.users);
-          this.renderPerfil();
-          this.actualizarNavbarFoto();
-          Swal.fire("Eliminada", "La foto ha sido eliminada correctamente.", "success");
+          const updatedUser = { ...AuthManager.users[user.username] };
+          delete updatedUser.foto;
+          try {
+            await window.firestore.saveUser(user.username, updatedUser);
+            AuthManager.users[user.username] = updatedUser;
+            this.renderPerfil();
+            this.actualizarNavbarFoto();
+            Swal.fire("Eliminada", "La foto ha sido eliminada correctamente.", "success");
+          } catch (error) {
+            showSyncError(error);
+          }
         }
       }
     });
@@ -725,17 +863,22 @@ class UIManager {
         
         return { nueva };
       }
-    }).then((result) => {
+    }).then(async (result) => {
       if (result.isConfirmed) {
         const user = AuthManager.currentUser;
-        AuthManager.users[user.username].pass = result.value.nueva;
-        Database.save('lab_users', AuthManager.users);
-        Swal.fire({
-          title: '¡Actualizada!',
-          text: 'Tu contraseña ha sido cambiada correctamente.',
-          icon: 'success',
-          confirmButtonColor: '#1E8449'
-        });
+        const updatedUser = { ...AuthManager.users[user.username], pass: result.value.nueva };
+        try {
+          await window.firestore.saveUser(user.username, updatedUser);
+          AuthManager.users[user.username] = updatedUser;
+          Swal.fire({
+            title: '¡Actualizada!',
+            text: 'Tu contraseña ha sido cambiada correctamente.',
+            icon: 'success',
+            confirmButtonColor: '#1E8449'
+          });
+        } catch (error) {
+          showSyncError(error);
+        }
       }
     });
   }
@@ -822,44 +965,55 @@ class UIManager {
         });
         return newPerms;
       }
-    }).then(res => {
+    }).then(async res => {
       if (res.isConfirmed) {
-        AuthManager.users[username].permisos = res.value;
-        Database.save('lab_users', AuthManager.users);
-        
-        if (AuthManager.currentUser && AuthManager.currentUser.username === username) {
-          AuthManager.currentUser.permisos = res.value;
-          AuthManager.aplicarPermisos(AuthManager.currentUser);
+        const updatedUser = { ...AuthManager.users[username], permisos: res.value };
+        try {
+          await window.firestore.saveUser(username, updatedUser);
+          AuthManager.users[username] = updatedUser;
+          if (AuthManager.currentUser && AuthManager.currentUser.username === username) {
+            AuthManager.currentUser.permisos = res.value;
+            AuthManager.aplicarPermisos(AuthManager.currentUser);
+          }
+
+          Swal.fire("Guardado", "Permisos actualizados correctamente.", "success");
+          AdminController.renderPermisosUsuarios();
+        } catch (error) {
+          showSyncError(error);
         }
-        
-        Swal.fire("Guardado", "Permisos actualizados correctamente.", "success");
-        AdminController.renderPermisosUsuarios();
       }
     });
   }
 
   // ===== SOLICITUDES =====
-  crearSolicitud() {
+  async crearSolicitud() {
     const paciente = document.getElementById("solicitudPaciente").value.trim();
     if (!paciente) return Swal.fire("Error", "Ingrese el nombre del paciente", "error");
 
-    solicitudes.push({
+    const solicitud = {
       id: Date.now().toString() + Math.random().toString(36).substring(2),
       doctor: AuthManager.currentUser.nombre,
       paciente,
       fecha: new Date().toLocaleDateString(),
       estado: "pendiente",
       leidoPorDoctor: false
-    });
+    };
 
-    Database.save("solicitudes", solicitudes);
+    try {
+      await window.firestore.saveSolicitud(solicitud.id, solicitud);
+      if (!solicitudes.some(existing => String(existing.id) === String(solicitud.id))) {
+        solicitudes.push(solicitud);
+      }
+    } catch (error) {
+      return showSyncError(error);
+    }
     document.getElementById("solicitudPaciente").value = "";
     this.actualizarNotificaciones();
     this.renderMisSolicitudes();
     Swal.fire("Éxito", "Solicitud enviada a recepción/laboratorio", "success");
   }
 
-  renderColaboraciones() {
+  async renderColaboraciones() {
     document.getElementById('vistaDoctoresColaboraciones')?.classList.remove('hidden');
     document.getElementById('vistaDetalleColaboraciones')?.classList.add('hidden');
 
@@ -893,7 +1047,7 @@ class UIManager {
     });
   }
 
-  verSolicitudesDoctor(doctor) {
+  async verSolicitudesDoctor(doctor) {
     document.getElementById('vistaDoctoresColaboraciones')?.classList.add('hidden');
     document.getElementById('vistaDetalleColaboraciones')?.classList.remove('hidden');
     document.getElementById('nombreDoctorColab').textContent = doctor;
@@ -908,10 +1062,15 @@ class UIManager {
       return;
     }
 
-    sols.forEach(s => {
+    for (const s of sols) {
       if (!s.id) {
         s.id = Date.now().toString() + Math.random().toString(36).substring(2);
-        Database.save("solicitudes", solicitudes);
+        try {
+          await window.firestore.saveSolicitud(s.id, s);
+        } catch (error) {
+          showSyncError(error);
+          return;
+        }
       }
       const doctorEscaped = doctor.replace(/'/g, "\\'");
       const estadoHTML = s.estado === 'pendiente'
@@ -923,7 +1082,7 @@ class UIManager {
         : `<button class="btn-primary" style="background:#E67E22; padding:6px 12px; font-size:12px; margin-right:5px;" onclick="ui.verEnvioLaboratorio('${s.id}')"><i class="fa-solid fa-eye"></i> Ver Envío</button>
            <button class="btn-danger" onclick="ui.eliminarEnvio('${s.id}', '${doctorEscaped}')" title="Regresar a 'En espera'">Volver a Enviar</button>`;
       tbody.innerHTML += `<tr><td>${s.paciente}</td><td>${s.fecha}</td><td>${estadoHTML}</td><td>${btnHtml}</td></tr>`;
-    });
+    }
   }
 
   volverListaDoctores() { this.renderColaboraciones(); }
@@ -945,19 +1104,22 @@ class UIManager {
       try {
         const base64Data = await PDFService.seleccionarYLeerPDF();
         if (base64Data) {
-          sol.estado = "enviada";
-          sol.resultado = `Enviado a ${doctorSolicitante}`;
-          sol.leidoPorDoctor = false;
-          sol.pdfBase64 = base64Data;
-          Database.save("solicitudes", solicitudes);
+          const actualizada = {
+            ...sol,
+            estado: "enviada",
+            resultado: `Enviado a ${doctorSolicitante}`,
+            leidoPorDoctor: false,
+            pdfBase64: base64Data
+          };
+          await window.firestore.saveSolicitud(sol.id, actualizada);
+          Object.assign(sol, actualizada);
           this.actualizarNotificaciones();
           this.verSolicitudesDoctor(doctorSolicitante);
           Swal.close();
           Swal.fire({ title: '¡Enviado!', text: `El PDF ha sido enviado al ${doctorSolicitante}.`, icon: 'success', confirmButtonColor: '#1E8449' });
         }
       } catch (err) {
-        console.error(err);
-        Swal.fire("Error", "No se pudo procesar o guardar el PDF.", "error");
+        showSyncError(err);
       }
     }
   }
@@ -979,11 +1141,16 @@ class UIManager {
     });
   }
 
-  verResultadosDoctor(solicitudId) {
+  async verResultadosDoctor(solicitudId) {
     const sol = solicitudes.find(s => String(s.id) === String(solicitudId));
     if (!sol) return;
-    sol.leidoPorDoctor = true;
-    Database.save("solicitudes", solicitudes);
+    const actualizada = { ...sol, leidoPorDoctor: true };
+    try {
+      await window.firestore.saveSolicitud(sol.id, actualizada);
+      Object.assign(sol, actualizada);
+    } catch (error) {
+      return showSyncError(error);
+    }
     this.actualizarNotificaciones();
 
     const pdfHtml = sol.pdfBase64
@@ -1032,30 +1199,39 @@ class UIManager {
     Swal.fire({
       title: '¿Cancelar solicitud?', text: 'Esta acción eliminará la solicitud por completo.', icon: 'warning',
       showCancelButton: true, confirmButtonText: 'Sí, eliminar', confirmButtonColor: '#e74c3c'
-    }).then(r => {
+    }).then(async r => {
       if (r.isConfirmed) {
-        solicitudes = solicitudes.filter(s => String(s.id) !== String(id));
-        Database.save("solicitudes", solicitudes);
-        this.verSolicitudesDoctor(doctor);
-        this.actualizarNotificaciones();
-        Swal.fire("Eliminado", "Solicitud eliminada", "success");
+        try {
+          await window.firestore.deleteSolicitud(id);
+          solicitudes = solicitudes.filter(s => String(s.id) !== String(id));
+          this.verSolicitudesDoctor(doctor);
+          this.actualizarNotificaciones();
+          Swal.fire("Eliminado", "Solicitud eliminada", "success");
+        } catch (error) {
+          showSyncError(error);
+        }
       }
     });
   }
 
-  eliminarEnvio(id, doctor) {
+  async eliminarEnvio(id, doctor) {
     Swal.fire({
       title: '¿Volver a enviar?', text: 'El documento se marcará como "En espera" para volver a enviarlo.', icon: 'warning',
       showCancelButton: true, confirmButtonText: 'Sí, volver a enviar', confirmButtonColor: '#e74c3c'
-    }).then(r => {
+    }).then(async r => {
       if (r.isConfirmed) {
         const sol = solicitudes.find(s => String(s.id) === String(id));
         if (sol) {
-          Object.assign(sol, { estado: "pendiente", resultado: "", numeroOrden: null, leidoPorDoctor: false, pdfBase64: null });
-          Database.save("solicitudes", solicitudes);
-          this.verSolicitudesDoctor(doctor);
-          this.actualizarNotificaciones();
-          Swal.fire("Listo", "Puede volver a compartir el documento.", "success");
+          const actualizada = { estado: "pendiente", resultado: "", numeroOrden: null, leidoPorDoctor: false, pdfBase64: null };
+          try {
+            await window.firestore.saveSolicitud(id, { ...sol, ...actualizada });
+            Object.assign(sol, actualizada);
+            this.verSolicitudesDoctor(doctor);
+            this.actualizarNotificaciones();
+            Swal.fire("Listo", "Puede volver a compartir el documento.", "success");
+          } catch (error) {
+            showSyncError(error);
+          }
         }
       }
     });
@@ -1535,17 +1711,21 @@ class UIManager {
         paciente: document.getElementById('swal-edit-nombre').value.trim(),
         edad: document.getElementById('swal-edit-edad').value.trim()
       })
-    }).then(res => {
+    }).then(async res => {
       if (res.isConfirmed) {
-        this.manager.actualizarDatosPaciente(orden.correlativo, res.value);
-        if (document.getElementById("modalDetalles").classList.contains("hidden")) return;
-        
-        if (Object.keys(orden.resultados || {}).length > 0) {
-          this.verResultados(orden.correlativo);
-        } else {
-          this.verDetalles(orden.correlativo);
+        try {
+          await this.manager.actualizarDatosPaciente(orden.correlativo, res.value);
+          if (document.getElementById("modalDetalles").classList.contains("hidden")) return;
+
+          if (Object.keys(orden.resultados || {}).length > 0) {
+            this.verResultados(orden.correlativo);
+          } else {
+            this.verDetalles(orden.correlativo);
+          }
+          Swal.fire({ icon: 'success', title: 'Datos actualizados', timer: 1500, showConfirmButton: false });
+        } catch (error) {
+          showSyncError(error);
         }
-        Swal.fire({ icon: 'success', title: 'Datos actualizados', timer: 1500, showConfirmButton: false });
       }
     });
   }
@@ -1622,7 +1802,7 @@ class UIManager {
     });
   }
 
-  procesarGuardarResultados() {
+  async procesarGuardarResultados() {
     const resultados = {};
     const clasif = this.ordenActualParaResultados.clasificacion || this.ordenActualParaResultados.genero || 'M';
     
@@ -1641,21 +1821,29 @@ class UIManager {
       }
     });
 
-    this.manager.guardarResultados(this.ordenActualParaResultados.correlativo, resultados);
-    document.getElementById("modalResultados").classList.add("hidden");
-    this.filtrarPorFecha();
-    Swal.fire("¡Guardado!", "Resultados actualizados", "success");
+    try {
+      await this.manager.guardarResultados(this.ordenActualParaResultados.correlativo, resultados);
+      document.getElementById("modalResultados").classList.add("hidden");
+      this.filtrarPorFecha();
+      Swal.fire("¡Guardado!", "Resultados actualizados", "success");
+    } catch (error) {
+      showSyncError(error);
+    }
   }
 
   eliminarOrden(correlativo) {
     Swal.fire({
       title: '🗑️ ¿Eliminar Orden?', text: `La orden será eliminada permanentemente`, icon: 'warning',
       showCancelButton: true, confirmButtonText: 'Sí, eliminar', confirmButtonColor: '#e74c3c'
-    }).then((r) => {
+    }).then(async (r) => {
       if (r.isConfirmed) {
-        this.manager.eliminarOrden(correlativo);
-        this.filtrarPorFecha();
-        Swal.fire("Eliminado", "Orden eliminada", "success");
+        try {
+          await this.manager.eliminarOrden(correlativo);
+          this.filtrarPorFecha();
+          Swal.fire("Eliminado", "Orden eliminada", "success");
+        } catch (error) {
+          showSyncError(error);
+        }
       }
     });
   }
@@ -1733,12 +1921,16 @@ class UIManager {
         }
         return { codigo: cod, nombre: nom, precio: Number(pre) };
       }
-    }).then(res => {
+    }).then(async res => {
       if (res.isConfirmed) {
-        this.manager.actualizarExamen(index, res.value);
-        this.renderExamenes();
-        this.renderChecklistExamenes();
-        Swal.fire({ icon: 'success', title: 'Actualizado', timer: 1500, showConfirmButton: false });
+        try {
+          await this.manager.actualizarExamen(index, res.value);
+          this.renderExamenes();
+          this.renderChecklistExamenes();
+          Swal.fire({ icon: 'success', title: 'Actualizado', timer: 1500, showConfirmButton: false });
+        } catch (error) {
+          showSyncError(error);
+        }
       }
     });
   }
@@ -1796,7 +1988,7 @@ class UIManager {
     `;
   }
 
-  guardarMachote() {
+  async guardarMachote() {
     if (this.machoteEditandoIndex === null) return;
     const examen = this.manager.examenes[this.machoteEditandoIndex];
     
@@ -1813,32 +2005,38 @@ class UIManager {
       return res;
     };
 
-    examen.machotes = {
+    const machotes = {
       M: extraerFilas('M'),
       F: extraerFilas('F'),
       N: extraerFilas('N')
     };
 
-    Database.save('examenes', this.manager.examenes);
-    document.getElementById("modalMachote").classList.add("hidden");
-    this.renderExamenes();
-    Swal.fire({icon: 'success', title: 'Machote guardado', timer: 1500, showConfirmButton: false});
+    try {
+      await window.firestore.saveExamen(examen.codigo, { ...examen, machotes });
+      const currentExamen = this.manager.examenes.find(item => item.codigo === examen.codigo);
+      if (currentExamen) currentExamen.machotes = machotes;
+      document.getElementById("modalMachote").classList.add("hidden");
+      this.renderExamenes();
+      Swal.fire({icon: 'success', title: 'Machote guardado', timer: 1500, showConfirmButton: false});
+    } catch (error) {
+      showSyncError(error);
+    }
   }
 
-  agregarExamen(cod, nom, pre, desc = "") {
+  async agregarExamen(cod, nom, pre, desc = "") {
     try {
-      this.manager.agregarExamen(cod, nom, pre, desc);
+      await this.manager.agregarExamen(cod, nom, pre, desc);
       this.renderExamenes();
       this.renderChecklistExamenes();
       return true;
     } catch (err) {
-      Swal.fire("Error", err.message, "error");
+      showSyncError(err);
       return false;
     }
   }
 
-  eliminarExamen(index) {
-    this.manager.eliminarExamen(index);
+  async eliminarExamen(index) {
+    await this.manager.eliminarExamen(index);
     this.renderExamenes();
     this.renderChecklistExamenes();
   }
@@ -1854,11 +2052,18 @@ class UIManager {
       showCancelButton: true,
       confirmButtonText: 'Guardar',
       confirmButtonColor: '#1a4a7a'
-    }).then((res) => {
+    }).then(async (res) => {
       if (res.isConfirmed) {
-        this.manager.examenes[index].descripcion = res.value.trim();
-        Database.save('examenes', this.manager.examenes);
-        Swal.fire({ icon: 'success', title: 'Especificación guardada', timer: 1500, showConfirmButton: false });
+        try {
+          const examen = this.manager.examenes[index];
+          const actualizado = { ...examen, descripcion: res.value.trim() };
+          await window.firestore.saveExamen(examen.codigo, actualizado);
+          const currentIndex = this.manager.examenes.findIndex(item => item.codigo === examen.codigo);
+          if (currentIndex !== -1) this.manager.examenes[currentIndex] = actualizado;
+          Swal.fire({ icon: 'success', title: 'Especificación guardada', timer: 1500, showConfirmButton: false });
+        } catch (error) {
+          showSyncError(error);
+        }
       }
     });
   }
@@ -1872,10 +2077,14 @@ class UIManager {
       showCancelButton: true,
       confirmButtonColor: '#e74c3c',
       confirmButtonText: 'Sí, eliminar'
-    }).then(r => {
+    }).then(async r => {
       if (r.isConfirmed) {
-        this.eliminarExamen(index);
-        Swal.fire({ icon: 'success', title: 'Eliminado', timer: 1500, showConfirmButton: false });
+        try {
+          await this.eliminarExamen(index);
+          Swal.fire({ icon: 'success', title: 'Eliminado', timer: 1500, showConfirmButton: false });
+        } catch (error) {
+          showSyncError(error);
+        }
       }
     });
   }
@@ -1941,11 +2150,15 @@ class UIManager {
         }
         return { codigo: cod, nombre: nom, descuento: Number(desc) };
       }
-    }).then(res => {
+    }).then(async res => {
       if (res.isConfirmed) {
-        this.manager.actualizarSeguro(index, res.value);
-        this.renderSeguros();
-        Swal.fire({ icon: 'success', title: 'Actualizado', timer: 1500, showConfirmButton: false });
+        try {
+          await this.manager.actualizarSeguro(index, res.value);
+          this.renderSeguros();
+          Swal.fire({ icon: 'success', title: 'Actualizado', timer: 1500, showConfirmButton: false });
+        } catch (error) {
+          showSyncError(error);
+        }
       }
     });
   }
@@ -1959,11 +2172,15 @@ class UIManager {
       showCancelButton: true,
       confirmButtonColor: '#e74c3c',
       confirmButtonText: 'Sí, eliminar'
-    }).then(r => {
+    }).then(async r => {
       if (r.isConfirmed) {
-        this.manager.eliminarSeguro(index);
-        this.renderSeguros();
-        Swal.fire({ icon: 'success', title: 'Eliminado', timer: 1500, showConfirmButton: false });
+        try {
+          await this.manager.eliminarSeguro(index);
+          this.renderSeguros();
+          Swal.fire({ icon: 'success', title: 'Eliminado', timer: 1500, showConfirmButton: false });
+        } catch (error) {
+          showSyncError(error);
+        }
       }
     });
   }
@@ -2034,11 +2251,15 @@ class UIManager {
         }
         return { dpi, nombre: nom, especialidad: esp };
       }
-    }).then((r) => {
+    }).then(async (r) => {
       if (r.isConfirmed) {
-        this.manager.actualizarDoctor(index, r.value);
-        this.renderDoctores();
-        Swal.fire({ icon: 'success', title: 'Guardado', timer: 1500, showConfirmButton: false });
+        try {
+          await this.manager.actualizarDoctor(index, r.value);
+          this.renderDoctores();
+          Swal.fire({ icon: 'success', title: 'Guardado', timer: 1500, showConfirmButton: false });
+        } catch (error) {
+          showSyncError(error);
+        }
       }
     });
   }
@@ -2048,11 +2269,15 @@ class UIManager {
     Swal.fire({
       title: '¿Eliminar Doctor?', text: `Vas a eliminar a: ${doc.nombre}`, icon: 'warning',
       showCancelButton: true, confirmButtonColor: '#e74c3c', confirmButtonText: 'Sí, eliminar'
-    }).then((r) => {
+    }).then(async (r) => {
       if (r.isConfirmed) {
-        this.manager.eliminarDoctor(index);
-        this.renderDoctores();
-        Swal.fire({ icon: 'success', title: 'Eliminado', timer: 1500, showConfirmButton: false });
+        try {
+          await this.manager.eliminarDoctor(index);
+          this.renderDoctores();
+          Swal.fire({ icon: 'success', title: 'Eliminado', timer: 1500, showConfirmButton: false });
+        } catch (error) {
+          showSyncError(error);
+        }
       }
     });
   }
@@ -2326,12 +2551,16 @@ class UIManager {
       confirmButtonText: 'Sí, enviar',
       confirmButtonColor: '#e74c3c',
       cancelButtonText: 'Cancelar'
-    }).then(res => {
+    }).then(async res => {
       if (res.isConfirmed) {
-        this.manager.eliminarCierreSoft(id);
-        this.renderBitacora();
-        this.renderBitacoraAdmin();
-        Swal.fire('Enviado', 'El cierre está en la papelera.', 'success');
+        try {
+          await this.manager.eliminarCierreSoft(id);
+          this.renderBitacora();
+          this.renderBitacoraAdmin();
+          Swal.fire('Enviado', 'El cierre está en la papelera.', 'success');
+        } catch (error) {
+          showSyncError(error);
+        }
       }
     });
   }
@@ -2385,12 +2614,16 @@ class UIManager {
     });
   }
 
-  restaurarCierre(id) {
-    this.manager.restaurarCierre(id);
-    this.renderBitacora();
-    this.renderBitacoraAdmin();
-    Swal.close();
-    Swal.fire("Restaurado", "El cierre ha sido restaurado correctamente.", "success");
+  async restaurarCierre(id) {
+    try {
+      await this.manager.restaurarCierre(id);
+      this.renderBitacora();
+      this.renderBitacoraAdmin();
+      Swal.close();
+      Swal.fire("Restaurado", "El cierre ha sido restaurado correctamente.", "success");
+    } catch (error) {
+      showSyncError(error);
+    }
   }
 
   eliminarDefinitivo(id) {
@@ -2402,11 +2635,15 @@ class UIManager {
       confirmButtonText: 'Sí, borrar',
       confirmButtonColor: '#e74c3c',
       cancelButtonText: 'Cancelar'
-    }).then(res => {
+    }).then(async res => {
       if (res.isConfirmed) {
-        this.manager.eliminarCierreDefinitivo(id);
-        this.mostrarPapeleraAdmin(); 
-        Swal.fire("Eliminado", "El cierre ha sido eliminado definitivamente.", "success");
+        try {
+          await this.manager.eliminarCierreDefinitivo(id);
+          this.mostrarPapeleraAdmin();
+          Swal.fire("Eliminado", "El cierre ha sido eliminado definitivamente.", "success");
+        } catch (error) {
+          showSyncError(error);
+        }
       }
     });
   }
@@ -2435,10 +2672,10 @@ class UIManager {
       confirmButtonText: '✅ Cerrar Caja',
       confirmButtonColor: '#1E8449',
       cancelButtonText: 'Cancelar'
-    }).then(res => {
+    }).then(async res => {
       if (!res.isConfirmed) return;
       try {
-        const cierre = this.manager.cerrarCaja(hoy, AuthManager.currentUser?.nombre || 'desconocido');
+        const cierre = await this.manager.cerrarCaja(hoy, AuthManager.currentUser?.nombre || 'desconocido');
         this.renderBitacora();
         this.renderBitacoraAdmin();
         Swal.fire({
@@ -2448,7 +2685,7 @@ class UIManager {
           confirmButtonText: 'Ver comprobante'
         }).then(() => this.imprimirComprobanteCaja(cierre.id));
       } catch (err) {
-        Swal.fire("Error", err.message, "error");
+        showSyncError(err);
       }
     });
   }
@@ -2767,11 +3004,106 @@ class AuthManager {
   static currentUser = null;
   static lab = null;
   static ui  = null;
+  static subscriptions = [];
 
   static async initLab() {
+    this.users = await loadUsersWithLegacy();
+    const settings = await window.firestore.getSettings();
+    if (settings) {
+      this.settings = settings;
+      localStorage.setItem("lab_firestore_migrated_settings", "true");
+    } else {
+      const marker = "lab_firestore_migrated_settings";
+      if (!localStorage.getItem(marker)) {
+        this.settings = Database.load("lab_settings", { showDoctores: true });
+        await window.firestore.saveSettings(this.settings);
+        localStorage.setItem(marker, "true");
+      } else {
+        this.settings = { showDoctores: true };
+      }
+    }
+
     this.lab = new LaboratoryManager();
     await this.lab.init();
     this.ui = new UIManager(this.lab);
+    solicitudes = await loadCollectionWithLegacy("solicitudes", "solicitudes", "id");
+    this.subscribeToChanges();
+  }
+
+  static subscribeToChanges() {
+    if (this.subscriptions.length > 0) return;
+
+    const watchCollection = (name, callback) => {
+      this.subscriptions.push(window.firestore.watchAll(name, (data) => {
+        try {
+          callback(data);
+        } catch (error) {
+          showSyncError(error);
+        }
+      }, showSyncError));
+    };
+
+    watchCollection("doctores", (data) => {
+      this.lab.doctores = data;
+      this.ui.renderDoctores();
+    });
+    watchCollection("examenes", (data) => {
+      this.lab.examenes = data;
+      this.ui.renderExamenes();
+    });
+    watchCollection("ordenes", (data) => {
+      this.lab.ordenes = data;
+      this.ui.filtrarPorFecha();
+      const dashboard = document.getElementById("adminDashboard");
+      if (dashboard && !dashboard.classList.contains("hidden")) {
+        AdminController.cargarEstadisticas();
+      }
+    });
+    watchCollection("seguros", (data) => {
+      this.lab.seguros = data;
+      this.ui.renderSeguros();
+    });
+    watchCollection("solicitudes", (data) => {
+      solicitudes = data;
+      this.ui.actualizarNotificaciones();
+      const listaColaboraciones = document.getElementById("vistaDoctoresColaboraciones");
+      const detalleColaboraciones = document.getElementById("vistaDetalleColaboraciones");
+      if (listaColaboraciones && !listaColaboraciones.classList.contains("hidden")) {
+        this.ui.renderColaboraciones();
+      } else if (detalleColaboraciones && !detalleColaboraciones.classList.contains("hidden")) {
+        const doctor = document.getElementById("nombreDoctorColab").textContent;
+        this.ui.verSolicitudesDoctor(doctor);
+      }
+      const misSolicitudes = document.getElementById("userMisSolicitudes");
+      if (misSolicitudes && !misSolicitudes.classList.contains("hidden")) {
+        this.ui.renderMisSolicitudes();
+      }
+    });
+    watchCollection("users", (data) => {
+      this.users = Object.fromEntries(data.map(({ id, ...user }) => [id, user]));
+      AdminController.renderTablaUsuarios();
+      AdminController.renderPermisosUsuarios();
+      if (this.currentUser && this.users[this.currentUser.username]) {
+        this.currentUser = { ...this.users[this.currentUser.username], username: this.currentUser.username };
+        this.aplicarPermisos(this.currentUser);
+      }
+    });
+
+    this.subscriptions.push(window.firestore.watch("caja", "config", (data) => {
+      if (!data) return;
+      this.lab.caja = data;
+      const userBitacora = document.getElementById("userBitacora");
+      if (userBitacora && !userBitacora.classList.contains("hidden")) {
+        this.ui.renderBitacora();
+      }
+      const adminFacturacion = document.getElementById("adminFacturacion");
+      if (adminFacturacion && !adminFacturacion.classList.contains("hidden")) {
+        this.ui.renderBitacoraAdmin();
+      }
+    }, showSyncError));
+    this.subscriptions.push(window.firestore.watch("settings", "config", (data) => {
+      if (data) this.settings = data;
+    }, showSyncError));
   }
 
   static getDefaultPermissions(rol) {
@@ -2889,14 +3221,21 @@ class AuthManager {
     }
   }
 
-  static toggleSeccionDoctores() {
+  static async toggleSeccionDoctores() {
     const checked = document.getElementById('toggleDoctores').checked;
-    this.settings.showDoctores = checked;
-    Database.save('lab_settings', this.settings);
+    const updatedSettings = { ...this.settings, showDoctores: checked };
+    try {
+      await window.firestore.saveSettings(updatedSettings);
+      this.settings = updatedSettings;
+    } catch (error) {
+      showSyncError(error);
+      document.getElementById('toggleDoctores').checked = this.settings.showDoctores;
+      return;
+    }
     Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: checked ? 'Sección Doctores: VISIBLE' : 'Sección Doctores: OCULTA', showConfirmButton: false, timer: 2000 });
   }
 
-  static crearUsuarioAdmin() {
+  static async crearUsuarioAdmin() {
     const nombre = document.getElementById('newUserName').value.trim();
     const user   = document.getElementById('newUserUser').value.trim().toLowerCase();
     const pass   = document.getElementById('newUserPass').value.trim();
@@ -2905,8 +3244,13 @@ class AuthManager {
     if (!nombre || !user || !pass) return Swal.fire("Error", "Llene todos los campos", "error");
     if (this.users[user]) return Swal.fire("Error", "El usuario ya existe", "error");
 
-    this.users[user] = { nombre, pass, rol };
-    Database.save('lab_users', this.users);
+    const newUser = { nombre, pass, rol };
+    try {
+      await window.firestore.saveUser(user, newUser);
+      this.users[user] = newUser;
+    } catch (error) {
+      return showSyncError(error);
+    }
 
     document.getElementById('newUserName').value = "";
     document.getElementById('newUserUser').value = "";
@@ -2918,13 +3262,17 @@ class AuthManager {
   }
 
   static eliminarUsuario(username) {
-    Swal.fire({ title: '¿Eliminar usuario?', text: `Se borrará a ${username}`, icon: 'warning', showCancelButton: true, confirmButtonColor: '#d33', confirmButtonText: 'Eliminar' }).then((r) => {
+    Swal.fire({ title: '¿Eliminar usuario?', text: `Se borrará a ${username}`, icon: 'warning', showCancelButton: true, confirmButtonColor: '#d33', confirmButtonText: 'Eliminar' }).then(async (r) => {
       if (r.isConfirmed) {
-        delete this.users[username];
-        Database.save('lab_users', this.users);
-        AdminController.renderTablaUsuarios();
-        AdminController.renderPermisosUsuarios();
-        Swal.fire("Eliminado", "Usuario borrado", "success");
+        try {
+          await window.firestore.deleteUser(username);
+          delete this.users[username];
+          AdminController.renderTablaUsuarios();
+          AdminController.renderPermisosUsuarios();
+          Swal.fire("Eliminado", "Usuario borrado", "success");
+        } catch (error) {
+          showSyncError(error);
+        }
       }
     });
   }
@@ -2992,9 +3340,20 @@ class AuthManager {
 // ============================================================================
 
 AuthManager.init();
-setTimeout(() => {
-  AuthManager.initLab();
-}, 100);
+const loginButton = document.querySelector("#loginView button");
+loginButton.disabled = true;
+loginButton.textContent = "Conectando con el sistema...";
+window.addEventListener("DOMContentLoaded", async () => {
+  try {
+    await AuthManager.initLab();
+    loginButton.disabled = false;
+    loginButton.textContent = "Ingresar al Sistema";
+  } catch (error) {
+    console.error("No se pudo inicializar el sistema:", error);
+    loginButton.textContent = "Error de conexión. Recargue la página";
+    Swal.fire("Error de conexión", "No se pudo sincronizar con Firestore. Verifique la conexión e intente nuevamente.", "error");
+  }
+});
 
 window.cerrarModal = () => document.getElementById("modalDetalles").classList.add("hidden");
 window.cerrarModalResultados = () => document.getElementById("modalResultados").classList.add("hidden");
@@ -3033,7 +3392,7 @@ window.toggleAdminSidebar    = () => document.getElementById('adminApp').classLi
 window.toggleSatMenu         = () => document.getElementById('satSidebar').classList.toggle('show');
 window.toggleUserDropdown    = () => document.getElementById('userDropdownMenu').classList.toggle('show');
 
-window.procesarGuardarOrdenConPago = () => {
+window.procesarGuardarOrdenConPago = async () => {
   const totalBase = AuthManager.ui.totalActual - AuthManager.ui.descuentoQ;
   const metodo = AuthManager.ui.metodoPago;
   const recibido = parseFloat(document.getElementById("pagoRecibido").value) || 0;
@@ -3058,13 +3417,18 @@ window.procesarGuardarOrdenConPago = () => {
   const doctor = document.getElementById("doctorSelect").value;
   const seguro = document.getElementById("tipoSeguro").value;
 
-  const orden = AuthManager.lab.crearOrden({
-    paciente, doctor,
-    examenesSeleccionados: AuthManager.ui.examenesSeleccionados,
-    total: totalFinal, descuentoQ: AuthManager.ui.descuentoQ, totalOriginal: AuthManager.ui.totalActual, edad,
-    tipoSeguro: seguro, clasificacion,
-    metodoPago: metodo, recargoPct, recibido, cambio
-  });
+  let orden;
+  try {
+    orden = await AuthManager.lab.crearOrden({
+      paciente, doctor,
+      examenesSeleccionados: AuthManager.ui.examenesSeleccionados,
+      total: totalFinal, descuentoQ: AuthManager.ui.descuentoQ, totalOriginal: AuthManager.ui.totalActual, edad,
+      tipoSeguro: seguro, clasificacion,
+      metodoPago: metodo, recargoPct, recibido, cambio
+    });
+  } catch (error) {
+    return showSyncError(error);
+  }
 
   ["nombrePaciente","fechaNacimiento","edadPaciente","buscarExamen"]
     .forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
@@ -3107,7 +3471,7 @@ window.agregarDoctor = async () => {
   }
 };
 
-window.agregarSeguro = () => {
+window.agregarSeguro = async () => {
   const codigo = document.getElementById("segCodigo").value.trim();
   const nombre = document.getElementById("segNombre").value.trim();
   const descuento = document.getElementById("segDescuento").value;
@@ -3115,7 +3479,7 @@ window.agregarSeguro = () => {
   if (!codigo || !nombre || descuento === "") return Swal.fire("Error", "Llene todos los campos", "error");
 
   try {
-    AuthManager.lab.agregarSeguro(codigo, nombre, descuento);
+    await AuthManager.lab.agregarSeguro(codigo, nombre, descuento);
     AuthManager.ui.renderSeguros();
     document.getElementById("segCodigo").value = "";
     document.getElementById("segNombre").value = "";
@@ -3126,14 +3490,14 @@ window.agregarSeguro = () => {
   }
 };
 
-window.agregarExamen = () => {
+window.agregarExamen = async () => {
   const c = document.getElementById("exCod").value.trim();
   const n = document.getElementById("exNom").value.trim();
   const p = document.getElementById("exPre").value;
 
   if (!c || !n || !p) return Swal.fire("Error", "Complete todos los campos", "error");
 
-  const ok = AuthManager.ui.agregarExamen(c, n, p);
+  const ok = await AuthManager.ui.agregarExamen(c, n, p);
   if (ok) {
     document.getElementById("exCod").value = "";
     document.getElementById("exNom").value = "";
