@@ -38,7 +38,7 @@ let solicitudes = Database.load("solicitudes", []);
 
 class LaboratoryManager {
   constructor() {
-    this.doctores = Database.load("doctores", []);
+    this.doctores = [];
     this.examenes = Database.load("examenes", []);
     this.ordenes  = Database.load("ordenes", []);
     this.seguros  = Database.load("seguros", []);
@@ -48,6 +48,10 @@ class LaboratoryManager {
     this.inicializarCaja();
     this.repararCorrelativos();
     this.inicializarMachotes();
+  }
+
+  async init() {
+    this.doctores = await window.firestore.getDoctores();
   }
 
   inicializarMachotes() {
@@ -201,20 +205,24 @@ class LaboratoryManager {
   }
 
   // ===== Doctores =====
-  agregarDoctor(dpi, nombre, especialidad) {
+  async agregarDoctor(dpi, nombre, especialidad) {
     if (this.doctores.some(d => d.dpi === dpi)) throw new Error("Ya existe un doctor con ese DPI.");
-    this.doctores.push({ dpi, nombre, especialidad, activo: true });
-    Database.save("doctores", this.doctores);
+    const doctor = { dpi, nombre, especialidad, activo: true };
+    await window.firestore.saveDoctor(dpi, doctor);
+    this.doctores.push(doctor);
   }
 
-  actualizarDoctor(index, nuevosDatos) {
-    this.doctores[index] = { ...this.doctores[index], ...nuevosDatos };
-    Database.save("doctores", this.doctores);
+  async actualizarDoctor(index, nuevosDatos) {
+    const doc = this.doctores[index];
+    const datosActualizados = { ...doc, ...nuevosDatos };
+    await window.firestore.saveDoctor(doc.dpi, datosActualizados);
+    this.doctores[index] = datosActualizados;
   }
 
-  eliminarDoctor(index) {
+  async eliminarDoctor(index) {
+    const doc = this.doctores[index];
+    await window.firestore.deleteDoctor(doc.dpi);
     this.doctores.splice(index, 1);
-    Database.save("doctores", this.doctores);
   }
 
   // ===== Seguros =====
@@ -2757,8 +2765,14 @@ class AuthManager {
   static users = Database.load('lab_users', AuthManager.defaultUsers);
   static settings = Database.load('lab_settings', { showDoctores: true });
   static currentUser = null;
-  static lab = new LaboratoryManager();
-  static ui  = new UIManager(AuthManager.lab);
+  static lab = null;
+  static ui  = null;
+
+  static async initLab() {
+    this.lab = new LaboratoryManager();
+    await this.lab.init();
+    this.ui = new UIManager(this.lab);
+  }
 
   static getDefaultPermissions(rol) {
     if (rol === 'doctor') {
@@ -2978,6 +2992,9 @@ class AuthManager {
 // ============================================================================
 
 AuthManager.init();
+setTimeout(() => {
+  AuthManager.initLab();
+}, 100);
 
 window.cerrarModal = () => document.getElementById("modalDetalles").classList.add("hidden");
 window.cerrarModalResultados = () => document.getElementById("modalResultados").classList.add("hidden");
@@ -3067,15 +3084,19 @@ window.procesarGuardarOrdenConPago = () => {
   }).then(res => { if (res.isConfirmed) showUserView('userDashboard'); });
 };
 
-window.agregarDoctor = () => {
+window.agregarDoctor = async () => {
   const dpi = document.getElementById("docDpi").value.trim();
   const nom = document.getElementById("docNombre").value.trim();
   const esp = document.getElementById("docEsp").value.trim();
 
   if (!dpi || !nom || !esp) return Swal.fire("Error", "Llene todos los campos", "error");
 
+  if (!AuthManager.lab) {
+    return Swal.fire("Error", "El sistema aún se está cargando, intente de nuevo en unos segundos", "warning");
+  }
+
   try {
-    AuthManager.lab.agregarDoctor(dpi, nom, esp);
+    await AuthManager.lab.agregarDoctor(dpi, nom, esp);
     AuthManager.ui.renderDoctores();
     document.getElementById("docDpi").value = "";
     document.getElementById("docNombre").value = "";

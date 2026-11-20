@@ -108,4 +108,5 @@ class FirestoreService {
 }
 
 export const firestore = new FirestoreService();
+window.firestore = firestore;
 console.log("✅ Firestore Service listo");
