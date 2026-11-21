@@ -92,8 +92,8 @@ let solicitudes = [];
 
 class LaboratoryManager {
   constructor() {
-    this.doctores = [];
-    this.examenes = [];
+    this.doctores = Database.load(" doctores\, []);
+    this.examenes = Database.load(" examenes\, []);
     this.ordenes = [];
     this.seguros = [];
     this.caja = { cierres: [], papeleraCierres: [], mesActual: null };
@@ -298,11 +298,8 @@ class LaboratoryManager {
   // ===== Doctores =====
   async agregarDoctor(dpi, nombre, especialidad) {
     if (this.doctores.some(d => d.dpi === dpi)) throw new Error("Ya existe un doctor con ese DPI.");
-    const doctor = { dpi, nombre, especialidad, activo: true };
-    await window.firestore.saveDoctor(dpi, doctor);
-    const index = this.doctores.findIndex(d => d.dpi === dpi);
-    if (index === -1) this.doctores.push(doctor);
-    else this.doctores[index] = doctor;
+    this.doctores.push({ dpi, nombre, especialidad, activo: true });
+    Database.save("doctores", this.doctores);
   }
 
   async actualizarDoctor(index, nuevosDatos) {
